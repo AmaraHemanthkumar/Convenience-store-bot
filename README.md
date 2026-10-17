@@ -83,6 +83,9 @@ Here you can change:
 
 ---
 
+## Ready-made barcode sheets
+`data/distributors-batch42-barcodes.xlsx` contains the 144 barcodes from The Distributors invoice (batch 42, OID 352), typed from photos. Every barcode passes its check-digit test. Items that were out of stock or late from the supplier are highlighted. Lines with no barcode on the invoice are on the **No barcode** tab. Load this file in **Add new items** as it is.
+
 ## Good to know
 - **Woolworths / Coles checks.** If either site shows a "are you a robot" page, the bot pauses and asks you to solve it in that tab, then continue. It doesn't try to get around these checks.
 - **Coles and barcodes.** Coles' website doesn't always find products by barcode. In that case the bot searches Coles by the Woolworths product name and marks the match *check*.

@@ -267,7 +267,8 @@
     const col = (re) => header.findIndex((h) => re.test(h));
     let bc = hasHeader ? col(/barcode|ean|upc|gtin|code/) : 0;
     if (bc < 0) bc = 0;
-    const nm = hasHeader ? col(/name|item|description/) : -1;
+    // a name column, but never a code/number column such as "Supplier item code"
+    const nm = hasHeader ? header.findIndex((h, i) => i !== bc && /name|description|product|^item$/.test(h) && !/code|no\.?$|number|qty/.test(h)) : -1;
     const ct = hasHeader ? col(/categ/) : -1;
     const cur = hasHeader ? col(/current|our|pos|shop/) : -1;
     const pr = hasHeader ? header.findIndex((h, i) => /price/.test(h) && i !== cur) : -1;
