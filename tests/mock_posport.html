@@ -1,0 +1,59 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mock PosPort</title>
+<style>
+ body{font-family:sans-serif} .row{display:flex;gap:8px;padding:8px;border-bottom:1px solid #ddd;align-items:flex-start}
+ .dd{position:relative;width:200px} .trigger{border:1px solid #ccc;padding:6px;cursor:pointer}
+ .menu{position:absolute;top:34px;left:0;background:#fff;border:1px solid #ccc;width:200px;max-height:120px;overflow:auto;z-index:9}
+ .menu div.opt{padding:4px 8px;cursor:pointer} table{border-collapse:collapse} td,th{border:1px solid #ccc;padding:4px}
+</style></head>
+<body>
+<!-- Mimics the structure seen in the screenshots: Bulk Create rows + an Items table -->
+<div id="bulk">
+  <div id="rows"></div>
+  <button id="cancel">Cancel</button>
+  <button id="add">+ Add Row</button>
+  <button id="create">Create 4 Items</button>
+</div>
+<hr>
+<input placeholder="Search" id="listSearch">
+<button id="printBtn" style="display:none">Print labels</button>
+<table id="items"><thead><tr><th></th><th>Label</th><th>Sr. No</th><th>Item Name</th><th>Price($)</th><th>Margin</th></tr></thead><tbody></tbody></table>
+<div id="pager"><button aria-label="Next page" id="next">›</button></div>
+<script>
+const CATS=['Biscuits','Grocery Pantry','Gum and Mints','CONFECTIONERY','Drinks','Milk and Dairy','Bakery','EGGS','News Papers'];
+function makeRow(){
+  const r=document.createElement('div');r.className='row';
+  r.innerHTML='<div class="img">img</div><div><input placeholder="Enter Item Name"><br><input placeholder="Enter Barcode"></div><input type="text" value="0" class="price">'+
+   '<div><div class="dd"><div class="trigger"><span class="val">Select Category</span> ⌄</div></div><div class="trigger" style="opacity:.4">Select Category first</div></div>'+
+   '<div><input placeholder="Variant Type"><input placeholder="Values"></div><div><label><input type="checkbox" checked> Sell at POS</label></div>';
+  const dd=r.querySelector('.dd');
+  dd.querySelector('.trigger').addEventListener('click',()=>{
+    if(dd.querySelector('.menu')){dd.querySelector('.menu').remove();return;}
+    const m=document.createElement('div');m.className='menu';
+    m.innerHTML='<input placeholder="Search">'+CATS.map(c=>'<div class="opt">'+c+'</div>').join('');
+    m.querySelector('input').addEventListener('input',e=>{m.querySelectorAll('.opt').forEach(o=>o.style.display=o.textContent.toLowerCase().includes(e.target.value.toLowerCase())?'':'none')});
+    m.querySelectorAll('.opt').forEach(o=>o.addEventListener('click',()=>{dd.querySelector('.val').textContent=o.textContent;m.remove();}));
+    dd.appendChild(m);
+  });
+  document.getElementById('rows').appendChild(r);
+  document.getElementById('create').textContent='Create '+document.querySelectorAll('#rows .row').length+' Items';
+}
+for(let i=0;i<4;i++)makeRow();
+document.getElementById('add').onclick=makeRow;
+const ITEMS=[['5 Gum Grape Spark 27g',0],['A2 Full Cream 2L',7.5],['ALLENS MINTIES 150G',5.5],['Allens Minties Party 500g',9]];
+const PAGE2=[['Aramada Foil Trays med 3pack',5.99]];
+let page=1;
+function drawItems(q){
+  const src=page===1?ITEMS:PAGE2;
+  const tb=document.querySelector('#items tbody');tb.innerHTML='';
+  src.filter(([n])=>!q||n.toLowerCase().includes(q.toLowerCase())).forEach(([n,p],i)=>{
+    const tr=document.createElement('tr');tr.innerHTML='<td><input type="checkbox" data-name="'+n+'"></td><td>'+n[0]+'</td><td>'+(i+1)+'</td><td>'+n+'</td><td>$'+p+'</td><td>—</td>';
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('input').forEach(cb=>{ if(window.sel&&window.sel.has(cb.dataset.name)) cb.checked=true; cb.addEventListener('change',()=>{window.sel=window.sel||new Set(); cb.checked?window.sel.add(cb.dataset.name):window.sel.delete(cb.dataset.name); document.getElementById('printBtn').style.display=window.sel.size?'':'none';});});
+}
+drawItems('');
+document.getElementById('listSearch').addEventListener('input',e=>setTimeout(()=>drawItems(e.target.value),200));
+document.getElementById('next').onclick=()=>{ if(page===1){page=2;drawItems('');} else document.getElementById('next').disabled=true; };
+</script>
+</body></html>

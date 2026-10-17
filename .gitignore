@@ -1,0 +1,7 @@
+python/chrome-profile/
+python/output/
+python/settings.json
+python/.installed
+__pycache__/
+*.pyc
+node_modules/

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Convenience Store Bot</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="icons/icon48.png" alt=""><span>Convenience Store Bot</span></div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="add" role="tab">1 · Add new items</button>
+      <button class="tab" data-tab="check" role="tab">2 · Price check</button>
+      <button class="tab" data-tab="labels" role="tab">3 · Labels</button>
+      <button class="tab" data-tab="settings" role="tab">Settings</button>
+    </nav>
+  </header>
+
+  <div id="banner" class="banner hidden">
+    <span id="bannerText"></span>
+    <button id="bannerContinue" class="btn primary small">Continue</button>
+    <button id="bannerStop" class="btn small">Stop</button>
+  </div>
+
+  <main>
+    <!-- ================= ADD ================= -->
+    <section id="tab-add" class="panel">
+      <div class="steps">
+        <div class="step">
+          <h3>Load barcodes</h3>
+          <p>Excel or CSV with a <b>Barcode</b> column. Optional columns: Name, Category, Price.</p>
+          <label class="btn file">Choose Excel file<input type="file" id="addFile" accept=".xlsx,.xls,.csv"></label>
+          <span id="addFileInfo" class="muted"></span>
+        </div>
+        <div class="step">
+          <h3>Look up prices</h3>
+          <p>Checks Woolworths and Coles (normal price, not specials). Our price = highest + markup.</p>
+          <button id="addLookup" class="btn primary" disabled>Look up prices</button>
+        </div>
+        <div class="step">
+          <h3>Check &amp; create</h3>
+          <p>Edit names, prices or categories below, then fill PosPort's Bulk Create page.</p>
+          <div class="row">
+            <button id="addCats" class="btn">Load categories from PosPort</button>
+            <button id="addCreate" class="btn primary" disabled>Create in PosPort</button>
+          </div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <span id="addSummary" class="muted">No items loaded.</span>
+        <span class="spacer"></span>
+        <button id="addExport" class="btn" disabled>Download comparison Excel</button>
+        <button id="addToLabels" class="btn" disabled>Send names to Labels</button>
+      </div>
+      <div class="tablewrap"><table id="addTable" class="grid"></table></div>
+    </section>
+
+    <!-- ================= CHECK ================= -->
+    <section id="tab-check" class="panel hidden">
+      <div class="steps">
+        <div class="step">
+          <h3>Read PosPort items</h3>
+          <p>Goes through Catalog › Items page by page and records names, prices and barcodes.</p>
+          <button id="chkScan" class="btn">Scan PosPort items</button>
+          <span id="chkScanInfo" class="muted"></span>
+        </div>
+        <div class="step">
+          <h3>Barcodes to check</h3>
+          <p>Excel with <b>Barcode</b> (and Name if you have it). Or check every scanned item that has a barcode.</p>
+          <label class="btn file">Choose Excel file<input type="file" id="chkFile" accept=".xlsx,.xls,.csv"></label>
+          <button id="chkUseAll" class="btn">Use all scanned items</button>
+          <span id="chkFileInfo" class="muted"></span>
+        </div>
+        <div class="step">
+          <h3>Compare</h3>
+          <p>Flags items less than <b id="lowLbl">$1.50</b> or more than <b id="highLbl">$2.00</b> above the highest supermarket price.</p>
+          <button id="chkLookup" class="btn primary" disabled>Compare prices</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <span id="chkSummary" class="muted">Nothing compared yet.</span>
+        <label class="check"><input type="checkbox" id="chkOnlyFlagged" checked> Show flagged only</label>
+        <span class="spacer"></span>
+        <button id="chkExport" class="btn" disabled>Download Excel</button>
+        <button id="chkApply" class="btn primary" disabled>Update ticked prices in PosPort</button>
+      </div>
+      <div class="tablewrap"><table id="chkTable" class="grid"></table></div>
+    </section>
+
+    <!-- ================= LABELS ================= -->
+    <section id="tab-labels" class="panel hidden">
+      <div class="steps two">
+        <div class="step">
+          <h3>Items to label</h3>
+          <p>One item name per line, exactly as in PosPort.</p>
+          <textarea id="lblNames" rows="12" placeholder="Allens Minties 150g&#10;A2 Full Cream 2L"></textarea>
+          <div class="row">
+            <label class="btn file">Load from Excel<input type="file" id="lblFile" accept=".xlsx,.xls,.csv"></label>
+            <button id="lblClear" class="btn">Clear</button>
+          </div>
+        </div>
+        <div class="step">
+          <h3>Make labels</h3>
+          <p>The bot searches each name in Catalog › Items, ticks its checkbox, then presses <b>Print labels</b>. You then pick the label stock and press Print in PosPort.</p>
+          <button id="lblRun" class="btn primary">Tick items &amp; open Print labels</button>
+          <ul id="lblLog" class="log"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SETTINGS ================= -->
+    <section id="tab-settings" class="panel hidden">
+      <div class="form">
+        <label>Markup for new items ($)<input type="number" step="0.01" id="s_markup"></label>
+        <label>Flag if less than this above highest ($)<input type="number" step="0.01" id="s_flagLow"></label>
+        <label>Flag if more than this above highest ($)<input type="number" step="0.01" id="s_flagHigh"></label>
+        <label>Max label name length<input type="number" id="s_nameMaxLength"></label>
+        <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
+        <label>Items per Bulk Create page<input type="number" id="s_batchSize"></label>
+        <label class="check"><input type="checkbox" id="s_extraBlankRow"> Keep one extra empty row (Bulk Create bug)</label>
+        <label class="check"><input type="checkbox" id="s_autoCreate"> Press "Create" automatically (leave off until you trust it)</label>
+        <label class="wide">Advanced: text patterns (JSON, only if PosPort renames buttons)
+          <textarea id="s_selectors" rows="6" placeholder='{"addRowButton": "^\\+?\\s*add row$"}'></textarea></label>
+        <div class="row">
+          <button id="sSave" class="btn primary">Save settings</button>
+          <button id="sTest" class="btn">Test PosPort page</button>
+          <span id="sInfo" class="muted"></span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer><ul id="log" class="log"></ul></footer>
+
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="core/rules.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>
