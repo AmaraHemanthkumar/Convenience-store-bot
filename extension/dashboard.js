@@ -215,11 +215,11 @@ function renderAdd() {
       const len = (r.name || '').length;
       return '<tr data-i="' + i + '">' +
         '<td><input type="checkbox" class="use" ' + (r.use !== false ? 'checked' : '') + '></td>' +
-        '<td>' + esc(r.barcode) + (r.inName ? '<span class="sub">' + esc(r.inName) + '</span>' : '') + '</td>' +
+        '<td>' + esc(r.barcode) + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
         '<td>' + storeCell(r.ww) + '</td><td>' + storeCell(r.coles) + '</td>' +
         '<td class="num">' + m(r.highest) + '</td>' +
         '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '"></td>' +
-        '<td><input type="text" class="name" value="' + esc(r.name || '') + '"><span class="count' + (len > S.nameMaxLength ? ' over' : '') + '">' + len + '/' + S.nameMaxLength + '</span></td>' +
+        '<td><input type="text" class="name" value="' + esc(r.name || '') + '"><span class="count' + (len > S.nameMaxLength ? ' over' : '') + '">' + len + '/' + S.nameMaxLength + '</span>' + (r.net ? '<span class="sub">name: ' + esc(r.net.source) + '</span>' : '') + '</td>' +
         '<td><select class="cat">' + catOpts(r.category) + '</select></td>' +
         '<td>' + addStatusPill(r) + '</td></tr>';
     }).join('') + '</tbody>';
@@ -258,7 +258,7 @@ $('addFile').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   const rows = R.parseInputRows(await readSheet(f));
-  state.add = rows.map((x) => ({ barcode: x.barcode, inName: x.name, name: x.name ? R.shortName(x.name, '', S.nameMaxLength) : '', category: x.category, overridePrice: x.price, price: x.price, status: 'waiting', use: true }));
+  state.add = rows.map((x) => ({ barcode: x.barcode, inName: x.name, hint: x.hint, name: x.name ? R.shortName(x.name, '', S.nameMaxLength) : '', category: x.category, overridePrice: x.price, price: x.price, status: 'waiting', use: true }));
   $('addFileInfo').textContent = f.name + ' — ' + rows.length + ' items';
   log('Loaded ' + rows.length + ' barcodes from ' + f.name);
   e.target.value = '';
@@ -274,15 +274,29 @@ $('addLookup').addEventListener('click', async () => {
       if (r.status !== 'waiting' && r.status !== 'error' && r.status !== 'not found') continue;
       n++;
       log('Looking up ' + (r.barcode || r.inName) + ' (' + n + ')');
-      const res = await lookupPrices(r.barcode, r.inName);
+      let res = await lookupPrices(r.barcode, r.inName || r.hint);
+      r.net = null;
+      if (!res.highest || !(res.ww && res.ww.found) && !(res.coles && res.coles.found)) {
+        // Not found by barcode: get the product name from open barcode databases,
+        // then try Woolworths/Coles again by that name.
+        const net = await window.CSB_STORES.internetLookup(r.barcode);
+        if (net && net.found) {
+          r.net = net;
+          log('Name from ' + net.source + ': ' + net.name);
+          const again = await lookupPrices('', [net.name, net.size].filter(Boolean).join(' '));
+          if (again.highest) res = again;
+        }
+      }
       r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
       const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
-      if (src && !r.inName) r.name = R.shortName(src.name, src.size, S.nameMaxLength);
-      else if (src && !r.name) r.name = R.shortName(src.name, src.size, S.nameMaxLength);
-      if (!r.category) r.category = R.guessCategory(src ? src.name : r.inName, res.ww && res.ww.dept, categories);
+      const nameSrc = src || r.net;
+      if (nameSrc && (!r.inName || !r.name)) r.name = R.shortName(nameSrc.name, nameSrc.size, S.nameMaxLength);
+      else if (!r.name && r.hint) r.name = R.shortName(r.hint, '', S.nameMaxLength);
+      if (!r.category) r.category = R.guessCategory(nameSrc ? nameSrc.name : (r.inName || r.hint), (res.ww && res.ww.dept) || (r.net && r.net.dept), categories);
       r.price = r.overridePrice || R.newItemPrice(res.highest, S);
       const unsure = [res.ww, res.coles].some((s) => s && s.found && s.match && s.match !== 'barcode');
-      if (!res.highest) { r.status = 'not found'; r.note = 'Not found at Woolworths or Coles'; }
+      if (r.barcode && !R.validBarcode(r.barcode)) { r.status = 'not found'; r.note = 'This barcode looks mistyped (check digit is wrong) - please re-scan it.'; }
+      else if (!res.highest) { r.status = 'not found'; r.note = 'No price at Woolworths or Coles' + (r.net ? ' (name from ' + r.net.source + ')' : r.name ? ' (name from your sheet)' : ''); }
       else { r.status = unsure ? 'check' : 'ready'; r.note = unsure ? 'Matched by name – please check it is the same product' : ''; }
       if (r.barcode && state.catalogue.some((c) => c.barcode && R.sameBarcode(c.barcode, r.barcode))) {
         r.status = 'exists'; r.note = 'This barcode is already in PosPort (from the last scan). Change status by editing and ticking again if you still want it.';
@@ -633,10 +647,24 @@ $('lblRun').addEventListener('click', async () => {
   $('lblLog').innerHTML = '';
   setBusy(true);
   try {
-    // Fast path: if we know every item's PosPort id, open the label page directly.
+    // Lines can be item names or barcodes. Turn barcodes into PosPort names where we know them.
+    const isBarcode = (x) => /^\d{7,14}$/.test(x.replace(/\s/g, ''));
     const cap = await pos('captured');
-    const byName = new Map(((cap && cap.items) || []).map((c) => [c.name.toLowerCase(), c.id]));
-    const ids = names.map((n) => byName.get(n.toLowerCase()));
+    const capItems = (cap && cap.items) || [];
+    const nameFor = (line) => {
+      if (!isBarcode(line)) return line;
+      const bc = line.replace(/\s/g, '');
+      const c = capItems.find((x) => x.barcode && R.sameBarcode(x.barcode, bc)) ||
+        state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, bc));
+      if (c) return c.name;
+      const a = state.add.find((x) => x.barcode && R.sameBarcode(x.barcode, bc) && x.name && (x.status === 'created' || x.status === 'filled'));
+      return a ? a.name : line;
+    };
+    const wanted = names.map((n) => ({ line: n, name: nameFor(n) }));
+
+    // Fast path: if we know every item's PosPort id, open the label page directly.
+    const byName = new Map(capItems.map((c) => [c.name.toLowerCase(), c.id]));
+    const ids = wanted.map((w) => byName.get(w.name.toLowerCase()));
     if (ids.every(Boolean)) {
       const tabId = await posTab();
       await chrome.tabs.update(tabId, { url: POS + '/print/labels?' + ids.map((id) => 'item=' + encodeURIComponent(id)).join('&'), active: true });
@@ -645,12 +673,14 @@ $('lblRun').addEventListener('click', async () => {
     }
     if (!(await posGo('/catalog/items', 'items'))) { lblLog('Items page did not open.', 'err'); return; }
     let ticked = 0;
-    for (const n of names) {
+    for (const w of wanted) {
       if (stopRequested) break;
-      const s = await pos('searchList', n, S.delayMs);
-      if (!s || !s.ok) { lblLog('✗ ' + n + ': ' + (s && s.error), 'err'); continue; }
-      const t = await pos('tickRow', n);
-      if (t && t.ok) { ticked++; lblLog('✓ ' + n, 'ok'); } else lblLog('✗ ' + n + ': ' + (t && t.error), 'err');
+      const label = w.line === w.name ? w.name : w.line + ' (' + w.name + ')';
+      const byCode = isBarcode(w.name);
+      const s = await pos('searchList', w.name, S.delayMs);
+      if (!s || !s.ok) { lblLog('✗ ' + label + ': ' + (s && s.error), 'err'); continue; }
+      const t = await pos('tickRow', w.name, byCode);
+      if (t && t.ok) { ticked++; lblLog('✓ ' + label + (byCode ? ' → ' + t.name : ''), 'ok'); } else lblLog('✗ ' + label + ': ' + (t && t.error), 'err');
       await sleep(S.delayMs / 2);
     }
     if (!ticked) { lblLog('Nothing was ticked.', 'err'); return; }

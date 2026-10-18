@@ -182,5 +182,38 @@
     return out;
   }
 
-  root.CSB_STORES = { wwLookup, colesLookup, wwSearchRaw, colesSearchRaw };
+  // ---------------- Open product databases (name only, no prices) ----------------
+  // Free, public barcode databases: food, beauty/health, and other products.
+  const OPEN_DBS = [
+    ['Open Food Facts', 'https://world.openfoodfacts.org/api/v2/product/'],
+    ['Open Beauty Facts', 'https://world.openbeautyfacts.org/api/v2/product/'],
+    ['Open Products Facts', 'https://world.openproductsfacts.org/api/v2/product/'],
+  ];
+
+  async function internetLookup(barcode) {
+    const bc = String(barcode || '').replace(/\D/g, '');
+    if (!bc) return { found: false };
+    const tries = [bc];
+    if (bc.length === 12) tries.push('0' + bc);           // UPC -> EAN-13
+    if (bc.length === 14 && bc[0] === '0') tries.push(bc.slice(1));
+    for (const [source, base] of OPEN_DBS) {
+      for (const code of tries) {
+        try {
+          const res = await fetch(base + code + '.json?fields=product_name,product_name_en,generic_name,brands,quantity,categories', { credentials: 'omit' });
+          if (!res.ok) continue;
+          const j = await res.json();
+          const p = j && j.status === 1 && j.product;
+          if (!p) continue;
+          const nm = (p.product_name_en || p.product_name || p.generic_name || '').trim();
+          if (!nm) continue;
+          const brand = String(p.brands || '').split(',')[0].trim();
+          const full = (brand && nm.toLowerCase().indexOf(brand.toLowerCase()) === -1 ? brand + ' ' : '') + nm;
+          return { found: true, source, name: full.replace(/\s+/g, ' ').trim(), size: (p.quantity || '').trim(), dept: p.categories || '' };
+        } catch (e) { /* try next */ }
+      }
+    }
+    return { found: false };
+  }
+
+  root.CSB_STORES = { wwLookup, colesLookup, wwSearchRaw, colesSearchRaw, internetLookup };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

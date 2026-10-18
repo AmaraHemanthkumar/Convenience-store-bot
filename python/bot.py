@@ -143,6 +143,15 @@ class Bot:
             return res or {"found": False}
         return {"found": False, "error": f"{label} kept failing"}
 
+    def internet(self, barcode):
+        """Product name from the free Open Food/Beauty/Products Facts barcode databases."""
+        try:
+            if not self.logic.evaluate("typeof CSB_STORES !== 'undefined'"):
+                self.logic.add_script_tag(path=str(CORE / "stores.js"))
+            return self.logic.evaluate("(b) => CSB_STORES.internetLookup(b)", barcode) or {"found": False}
+        except PWError:
+            return {"found": False}
+
     def lookup(self, barcode, name_hint=""):
         ww = self.store("ww", "wwLookup", barcode, name_hint or "")
         self.pause()
@@ -262,9 +271,17 @@ class Bot:
         out = []
         for n, it in enumerate(items, 1):
             print(f"  [{n}/{len(items)}] {it['barcode'] or it['name']} ...", end=" ", flush=True)
-            ww, coles, highest = self.lookup(it["barcode"], it.get("name") or "")
-            srcp = ww if ww.get("found") else (coles if coles.get("found") else None)
-            full = srcp["name"] if srcp else it.get("name") or ""
+            ww, coles, highest = self.lookup(it["barcode"], it.get("name") or it.get("hint") or "")
+            net = None
+            if not (ww.get("found") or coles.get("found")):
+                net = self.internet(it["barcode"])
+                if net.get("found"):
+                    print(f"(name from {net['source']}: {net['name']})", end=" ", flush=True)
+                    w2, c2, h2 = self.lookup("", " ".join(x for x in (net["name"], net.get("size", "")) if x))
+                    if h2:
+                        ww, coles, highest = w2, c2, h2
+            srcp = ww if ww.get("found") else (coles if coles.get("found") else (net if net and net.get("found") else None))
+            full = srcp["name"] if srcp else it.get("name") or it.get("hint") or ""
             name = self.rules("shortName", it.get("name") or full, "" if it.get("name") else (srcp or {}).get("size", ""),
                               self.settings["nameMaxLength"]) if full else ""
             cat = it.get("category") or self.rules("guessCategory", full, ww.get("dept", ""), cat_list)
@@ -473,7 +490,7 @@ class Bot:
     # =====================================================================
     def labels(self):
         last = OUT / "last-created-names.txt"
-        print("\n  Where are the item names?")
+        print("\n  Which items? (names or barcodes)")
         print("   1) Type / paste them now")
         print("   2) An Excel or text file")
         if last.exists():
@@ -503,8 +520,25 @@ class Bot:
         if not names:
             return
         self.pos_page()
-        cap = {i["name"].lower(): i["id"] for i in (self.pos("captured") or {}).get("items", [])}
-        ids = [cap.get(n.lower()) for n in names]
+        captured = (self.pos("captured") or {}).get("items", [])
+        catalogue = []
+        cat_file = OUT / "posport-catalogue.json"
+        if cat_file.exists():
+            catalogue = json.loads(cat_file.read_text())
+
+        def is_bc(x):
+            return x.replace(" ", "").isdigit() and 7 <= len(x.replace(" ", "")) <= 14
+
+        def name_for(line):
+            if not is_bc(line):
+                return line
+            for c in captured + catalogue:
+                if c.get("barcode") and self.rules("sameBarcode", c["barcode"], line):
+                    return c["name"]
+            return line
+        wanted = [(n, name_for(n)) for n in names]
+        cap = {i["name"].lower(): i["id"] for i in captured}
+        ids = [cap.get(nm.lower()) for _, nm in wanted]
         if all(ids):
             url = POS + "/print/labels?" + "&".join("item=" + i for i in ids)
             self.pos_page().goto(url)
@@ -515,10 +549,12 @@ class Bot:
             print("  Items page did not open.")
             return
         ticked = 0
-        for n in names:
-            s = self.pos("searchList", n, self.settings["delayMs"])
-            t = self.pos("tickRow", n) if s.get("ok") else s
-            print(f"   {'OK ' if t.get('ok') else 'NO '} {n}" + ("" if t.get("ok") else f"  ({t.get('error')})"))
+        for line, nm in wanted:
+            s = self.pos("searchList", nm, self.settings["delayMs"])
+            t = self.pos("tickRow", nm, is_bc(nm)) if s.get("ok") else s
+            shown = line if line == nm else f"{line} ({nm})"
+            print(f"   {'OK ' if t.get('ok') else 'NO '} {shown}" + (f" -> {t.get('name')}" if t.get("ok") and is_bc(nm) else "")
+                  + ("" if t.get("ok") else f"  ({t.get('error')})"))
             ticked += 1 if t.get("ok") else 0
         if ticked:
             r = self.pos("clickPrintLabels")

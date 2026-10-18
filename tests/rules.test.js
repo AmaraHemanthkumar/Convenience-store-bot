@@ -20,6 +20,10 @@ assert.strictEqual(R.cleanBarcode(9300682012345), '9300682012345');
 assert.strictEqual(R.cleanBarcode('9300682012345.0'), '9300682012345');
 assert.ok(R.sameBarcode('09300682012345', '9300682012345'));
 
+assert.ok(R.validBarcode('9300605094703'));
+assert.ok(R.validBarcode('93645102'));
+assert.ok(!R.validBarcode('9300605094704'));
+
 // names fit the label and keep the size
 for (const [full, size] of [
   ["Allen's Minties Lollies Bag 150g", '150g'],

@@ -346,9 +346,15 @@
     return r || null;
   }
 
-  async function tickRow(name) {
-    const r = findRow(name);
-    if (!r) return { ok: false, error: 'No exact match for "' + name + '" in the list.' };
+  // allowSingle: after searching by barcode the list shows only that item, so the single row is the one
+  async function tickRow(name, allowSingle) {
+    let r = findRow(name);
+    if (!r && allowSingle) {
+      const rows = listRows();
+      if (rows.length === 1) r = rows[0];
+      else if (rows.length > 1) return { ok: false, error: rows.length + ' items match "' + name + '" - use the item name instead.' };
+    }
+    if (!r) return { ok: false, error: 'Not found in Catalog > Items (search showed ' + listRows().length + ' rows).' };
     if (!r.checkbox) return { ok: false, error: 'No checkbox in the row for "' + name + '".' };
     if (!r.checked) {
       realClick(r.checkbox.closest('label') || r.checkbox);

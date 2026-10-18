@@ -89,6 +89,17 @@
     return s;
   }
 
+  // GS1 check digit (EAN-8, UPC-A, EAN-13, GTIN-14). Catches most typing mistakes.
+  function validBarcode(v) {
+    const d = cleanBarcode(v);
+    if (![8, 12, 13, 14].includes(d.length)) return false;
+    const n = d.split('').map(Number);
+    const chk = n.pop();
+    let sum = 0;
+    n.reverse().forEach((x, i) => { sum += x * (i % 2 === 0 ? 3 : 1); });
+    return (10 - (sum % 10)) % 10 === chk;
+  }
+
   function sameBarcode(a, b) {
     const x = cleanBarcode(a).replace(/^0+/, '');
     const y = cleanBarcode(b).replace(/^0+/, '');
@@ -268,7 +279,9 @@
     let bc = hasHeader ? col(/barcode|ean|upc|gtin|code/) : 0;
     if (bc < 0) bc = 0;
     // a name column, but never a code/number column such as "Supplier item code"
-    const nm = hasHeader ? header.findIndex((h, i) => i !== bc && /name|description|product|^item$/.test(h) && !/code|no\.?$|number|qty/.test(h)) : -1;
+    // supplier/invoice wording: used only to help searching, never as the label name
+    const hn = hasHeader ? header.findIndex((h, i) => i !== bc && /supplier|invoice|desc/.test(h) && !/code|no\.?$|number|qty|rrp|price|status/.test(h)) : -1;
+    const nm = hasHeader ? header.findIndex((h, i) => i !== bc && i !== hn && /name|description|product|^item$/.test(h) && !/code|no\.?$|number|qty/.test(h)) : -1;
     const ct = hasHeader ? col(/categ/) : -1;
     const cur = hasHeader ? col(/current|our|pos|shop/) : -1;
     const pr = hasHeader ? header.findIndex((h, i) => /price/.test(h) && i !== cur) : -1;
@@ -279,11 +292,13 @@
       const name = nm >= 0 ? String(r[nm] || '').trim() : '';
       if (!barcode && !name) return;
       const key = barcode || name.toLowerCase();
+      if (!barcode && !name && hn >= 0 && !String(r[hn] || '').trim()) return;
       if (seen.has(key)) return;
       seen.add(key);
       out.push({
         barcode,
         name,
+        hint: hn >= 0 ? String(r[hn] || '').trim() : '',
         category: ct >= 0 ? String(r[ct] || '').trim() : '',
         price: pr >= 0 ? parseMoney(r[pr]) : null,
         currentPrice: cur >= 0 ? parseMoney(r[cur]) : null,
@@ -294,7 +309,7 @@
 
   const api = {
     DEFAULT_SETTINGS, DEFAULT_CATEGORIES, round2, parseMoney, money, regularPrice,
-    highestPrice, newItemPrice, checkExistingPrice, cleanBarcode, sameBarcode,
+    highestPrice, newItemPrice, checkExistingPrice, cleanBarcode, sameBarcode, validBarcode,
     shortName, guessCategory, similarity, bestMatch, parseInputRows, normaliseSize,
   };
   root.CSB_RULES = api;
