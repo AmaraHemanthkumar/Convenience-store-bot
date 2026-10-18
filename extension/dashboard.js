@@ -10,7 +10,7 @@ const STORES = {
 
 let S = Object.assign({}, R.DEFAULT_SETTINGS, { selectors: {} });
 let categories = R.DEFAULT_CATEGORIES.slice();
-const state = { add: [], check: [], checkInput: [], catalogue: [] };
+const state = { add: [], check: [], checkInput: [], catalogue: [], labels: [] };
 let busy = false;
 let stopRequested = false;
 
@@ -186,6 +186,32 @@ function writeSheet(rows, filename, sheetName) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Sheet1');
   XLSX.writeFile(wb, filename);
+}
+
+// All the detail we have about one supermarket result, as spreadsheet columns.
+function storeCols(label, x) {
+  const o = {};
+  o[label + ' found'] = x ? (x.found ? 'yes' : (x.blocked ? 'blocked' : 'no')) : 'not checked';
+  o[label + ' matched by'] = x && x.found ? (x.match || '') : '';
+  o[label + ' product'] = x && x.found ? x.name || '' : '';
+  o[label + ' size'] = x && x.found ? x.size || '' : '';
+  o[label + ' normal $'] = x && x.found ? (x.regular || '') : '';
+  o[label + ' shelf now $'] = x && x.found ? (x.now || '') : '';
+  o[label + ' was $'] = x && x.found ? (x.was || '') : '';
+  o[label + ' on special'] = x && x.found ? (x.onSpecial ? 'yes' : 'no') : '';
+  o[label + ' department'] = x && x.found ? x.dept || '' : '';
+  o[label + ' product code'] = x && x.found ? (x.stockcode || x.id || '') : '';
+  o[label + ' link'] = x && x.found ? x.url || '' : '';
+  o[label + ' error'] = x && x.error ? x.error : '';
+  o[label + ' other results'] = x && x.candidates && x.candidates.length
+    ? x.candidates.map((c) => c.name + (c.regular ? ' $' + Number(c.regular).toFixed(2) : '')).join(' | ') : '';
+  return o;
+}
+
+function downloadFailed(rows, prefix, sheet) {
+  if (!rows.length) { log('Nothing failed – no file needed.', 'ok'); return; }
+  writeSheet(rows, prefix + '-' + new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-') + '.xlsx', sheet);
+  log('Downloaded ' + rows.length + ' failed items.', 'ok');
 }
 
 function storeCell(s) {
@@ -397,6 +423,34 @@ $('addExport').addEventListener('click', () => {
   log('Comparison Excel downloaded.', 'ok');
 });
 
+const ADD_FAILED = ['not found', 'error', 'check'];
+$('addFailed').addEventListener('click', () => {
+  const rows = state.add.filter((r) => ADD_FAILED.includes(r.status)).map((r) => Object.assign({
+    'Why it failed': r.status === 'check' ? 'Matched by name, not barcode – make sure it is the same product'
+      : r.status === 'error' ? 'PosPort did not accept this row' : 'No price found',
+    Barcode: r.barcode,
+    'Barcode check digit': r.barcode ? (R.validBarcode(r.barcode) ? 'ok' : 'WRONG – re-scan') : '',
+    'Name in your sheet': r.inName || '',
+    'Supplier text': r.hint || '',
+    'Label name (bot)': r.name || '',
+    'Name length': (r.name || '').length,
+    Category: r.category || '',
+    'Our price $': r.price || '',
+    'Highest $': r.highest || '',
+    'Status': r.status,
+    'Details': r.note || '',
+    'Used in this run': r.use === false ? 'no' : 'yes',
+  }, storeCols('Woolworths', r.ww), storeCols('Coles', r.coles), {
+    'Internet name': r.net ? r.net.name : '',
+    'Internet size': r.net ? r.net.size || '' : '',
+    'Internet source': r.net ? r.net.source : '',
+    'Internet category': r.net ? r.net.dept || '' : '',
+    'Search on Woolworths': r.barcode ? 'https://www.woolworths.com.au/shop/search/products?searchTerm=' + r.barcode : '',
+    'Search on Coles': r.barcode ? 'https://www.coles.com.au/search/products?q=' + r.barcode : '',
+  }));
+  downloadFailed(rows, 'add-items-failed', 'Failed');
+});
+
 $('addToLabels').addEventListener('click', () => {
   const names = state.add.filter((r) => r.status === 'created' || r.status === 'filled').map((r) => r.name);
   const list = names.length ? names : state.add.filter((r) => r.name).map((r) => r.name);
@@ -587,6 +641,26 @@ $('chkExport').addEventListener('click', () => {
   log('Price check Excel downloaded.', 'ok');
 });
 
+$('chkFailed').addEventListener('click', () => {
+  const rows = state.check.filter((r) => r.status === 'NO DATA' || r.applied === false || !r.posName).map((r) => Object.assign({
+    'Why it failed': r.applied === false ? 'Price update in PosPort failed'
+      : !r.posName ? 'Could not find this item in the PosPort scan'
+      : r.ours === null || r.ours === undefined ? 'No PosPort price' : 'No Woolworths or Coles price',
+    'PosPort item': r.posName || '',
+    'PosPort id': r.posId || '',
+    Barcode: r.barcode || '',
+    'Name in your sheet': r.inName || '',
+    'Our price $': r.ours === null || r.ours === undefined ? '' : r.ours,
+    'Highest $': r.highest || '',
+    'Above highest $': r.diff === null || r.diff === undefined ? '' : r.diff,
+    Status: r.status,
+    'New price $': r.newPrice || '',
+    'Update result': r.applied === true ? 'updated' : r.applied === false ? 'FAILED' : '',
+    Details: r.note || '',
+  }, storeCols('Woolworths', r.ww), storeCols('Coles', r.coles)));
+  downloadFailed(rows, 'price-check-failed', 'Failed');
+});
+
 $('chkApply').addEventListener('click', async () => {
   const todo = state.check.filter((r) => r.apply && r.posName && r.newPrice > 0);
   if (!todo.length) { log('Tick the rows to update and give them a new price.', 'err'); return; }
@@ -644,7 +718,23 @@ $('lblFile').addEventListener('change', async (e) => {
   $('lblNames').value = names.join('\n');
   e.target.value = '';
 });
-$('lblClear').addEventListener('click', () => { $('lblNames').value = ''; $('lblLog').innerHTML = ''; });
+$('lblFailed').addEventListener('click', () => {
+  const rows = (state.labels || []).filter((r) => r.status === 'failed').map((r) => ({
+    'What you entered': r.line,
+    'Barcode check digit': r.barcodeOk === '' || r.barcodeOk === undefined ? '' : (r.barcodeOk ? 'ok' : 'WRONG – re-scan'),
+    'Product it is': r.product || '',
+    'Where the name came from': r.source || '',
+    'Why it failed': r.reason || '',
+    'Closest PosPort item': r.closest || '',
+    'Closest match %': r.closestScore ? Math.round(r.closestScore * 100) : '',
+    'Next closest PosPort item': r.runnerUp || '',
+    'Words searched in PosPort': r.words || '',
+    'In last PosPort scan?': state.catalogue.length ? (r.closest && state.catalogue.some((c) => c.name === r.closest) ? 'closest item is' : 'no close item') : 'no scan yet',
+    Time: r.time,
+  }));
+  downloadFailed(rows, 'labels-failed', 'Failed');
+});
+$('lblClear').addEventListener('click', () => { $('lblNames').value = ''; $('lblLog').innerHTML = ''; state.labels = []; refreshButtons(); });
 
 // What is this barcode? Woolworths, then Coles, then the open barcode databases.
 async function identifyBarcode(bc) {
@@ -687,15 +777,18 @@ async function tickProduct(product) {
     }
   }
   if (best && best.item) {
-    return { ok: false, error: 'not sure – closest is "' + best.item.name + '" (' + Math.round(best.score * 100) + '%)' + (best.runnerUp ? ' or "' + best.runnerUp.name + '"' : '') + '. Paste the exact name to use it.' };
+    return { ok: false, error: 'not sure – closest is "' + best.item.name + '" (' + Math.round(best.score * 100) + '%)' + (best.runnerUp ? ' or "' + best.runnerUp.name + '"' : '') + '. Paste the exact name to use it.',
+      closest: best.item.name, closestScore: best.score, runnerUp: best.runnerUp ? best.runnerUp.name : '', words: R.searchWords(product).join(', ') };
   }
-  return { ok: false, error: 'no item like "' + product + '" in PosPort' };
+  return { ok: false, error: 'no item like "' + product + '" in PosPort', words: R.searchWords(product).join(', ') };
 }
 
 $('lblRun').addEventListener('click', async () => {
   const names = $('lblNames').value.split('\n').map((s) => s.trim()).filter(Boolean);
   if (!names.length) return;
   $('lblLog').innerHTML = '';
+  state.labels = [];
+  const record = (o) => { state.labels.push(Object.assign({ time: new Date().toLocaleString() }, o)); };
   setBusy(true);
   try {
     // Lines can be item names or barcodes. Turn barcodes into PosPort names where we know them.
@@ -719,6 +812,7 @@ $('lblRun').addEventListener('click', async () => {
     if (ids.every(Boolean)) {
       const tabId = await posTab();
       await chrome.tabs.update(tabId, { url: POS + '/print/labels?' + ids.map((id) => 'item=' + encodeURIComponent(id)).join('&'), active: true });
+      wanted.forEach((w) => record({ line: w.line, product: w.name, posName: w.name, status: 'ticked', how: 'opened by PosPort id' }));
       lblLog('Opened Print labels with all ' + names.length + ' items. Choose the label stock and press Print.', 'ok');
       return;
     }
@@ -727,18 +821,31 @@ $('lblRun').addEventListener('click', async () => {
     for (const w of wanted) {
       if (stopRequested) break;
       let product = w.name;
+      let id = null;
       if (isBarcode(product)) {
         // PosPort can't search barcodes: find out what the product is first
-        const id = await identifyBarcode(product);
-        if (!id) { lblLog('✗ ' + w.line + ': not found at Woolworths, Coles or the barcode databases – type its name instead', 'err'); continue; }
+        id = await identifyBarcode(product);
+        if (!id) {
+          lblLog('✗ ' + w.line + ': not found at Woolworths, Coles or the barcode databases – type its name instead', 'err');
+          record({ line: w.line, status: 'failed', reason: 'Barcode not found at Woolworths, Coles or the barcode databases', barcodeOk: R.validBarcode(w.line) });
+          continue;
+        }
         product = id.name;
         lblLog('… ' + w.line + ' is "' + product + '" (' + id.source + ')');
       }
       const res = await tickProduct(product);
+      record({
+        line: w.line, product, source: id ? id.source : (w.name !== w.line ? 'last PosPort scan' : 'typed name'),
+        status: res.ok ? 'ticked' : 'failed', posName: res.ok ? res.name : '', score: res.score || '',
+        reason: res.ok ? '' : res.error, closest: res.closest || '', closestScore: res.closestScore || '', runnerUp: res.runnerUp || '',
+        words: res.words || '', barcodeOk: isBarcode(w.line) ? R.validBarcode(w.line) : '',
+      });
       if (res.ok) { ticked++; lblLog('✓ ' + w.line + (res.name.toLowerCase() !== w.line.toLowerCase() ? ' → ' + res.name + (res.score ? ' (' + Math.round(res.score * 100) + '% match)' : '') : ''), 'ok'); }
       else lblLog('✗ ' + w.line + ': ' + res.error, 'err');
       await sleep(S.delayMs / 2);
     }
+    const nFail = state.labels.filter((r) => r.status === 'failed').length;
+    if (nFail) lblLog(nFail + ' failed – press "Download failed items" for an Excel with the details.', 'err');
     if (!ticked) { lblLog('Nothing was ticked.', 'err'); return; }
     const p = await pos('clickPrintLabels');
     const tabId = await posTab();
@@ -801,6 +908,9 @@ function refreshButtons() {
   $('chkLookup').disabled = !state.checkInput.length;
   $('chkExport').disabled = !state.check.length;
   $('chkApply').disabled = !state.check.some((r) => r.apply);
+  $('addFailed').disabled = !state.add.some((r) => ADD_FAILED.includes(r.status));
+  $('chkFailed').disabled = !state.check.some((r) => r.status === 'NO DATA' || r.applied === false || !r.posName);
+  $('lblFailed').disabled = !(state.labels || []).some((r) => r.status === 'failed');
 }
 
 (async function init() {

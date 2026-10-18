@@ -29,6 +29,13 @@ def setup_routes(ctx):
     ctx.route("https://manager.posport.com.au/**", lambda r: r.fulfill(body=MOCK, content_type="text/html"))
 
 
+def save_xlsx(download):
+    path = pathlib.Path(tempfile.mkdtemp()) / download.suggested_filename
+    download.save_as(path)
+    assert path.suffix == ".xlsx", path
+    return path
+
+
 def wait_until(page, fn, timeout=60000):
     """Poll from Python (extension pages forbid string eval)."""
     for _ in range(timeout // 250):
@@ -80,13 +87,30 @@ def main():
 
         # Labels: search + tick + Print labels on the mock list
         page.click("[data-tab=labels]")
-        page.fill("#lblNames", "A2 Full Cream 2L\n9300682012345")
+        page.fill("#lblNames", "A2 Full Cream 2L\n9300682012345\nMystery Snack 99g")
         page.click("#lblRun")
         wait_until(page, lambda: "Print labels" in page.inner_text("#lblLog"))
         print("labels log:", page.inner_text("#lblLog").replace("\n", " | "))
         assert "✓ A2 Full Cream 2L" in page.inner_text("#lblLog")
         assert "✓ 9300682012345 → ALLENS MINTIES 150G" in page.inner_text("#lblLog")  # barcode -> Woolworths name -> keyword search
 
+        # "Download failed items" on Labels and Add tabs
+        from openpyxl import load_workbook
+        with page.expect_download() as dl:
+            page.click("#lblFailed")
+        ws = load_workbook(save_xlsx(dl.value)).active
+        head = [c.value for c in ws[1]]
+        print("labels failed sheet:", head, [c.value for c in ws[2]][:5])
+        assert ws.max_row == 2 and ws.cell(2, 1).value == "Mystery Snack 99g" and "Why it failed" in head
+        page.click("[data-tab=add]")
+        with page.expect_download() as dl:
+            page.click("#addFailed")
+        ws = load_workbook(save_xlsx(dl.value)).active
+        head = [c.value for c in ws[1]]
+        print("add failed sheet:", ws.max_row - 1, "rows,", len(head), "columns")
+        assert "Woolworths other results" in head and "Coles normal $" in head and ws.max_row >= 2
+
+        page.click("[data-tab=labels]")
         # Price check: scan the mock list, then compare a name-only sheet
         page.click("[data-tab=check]")
         page.click("#chkScan")

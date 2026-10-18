@@ -51,6 +51,7 @@
         <span id="addSummary" class="muted">No items loaded.</span>
         <span class="spacer"></span>
         <button id="addExport" class="btn" disabled>Download comparison Excel</button>
+        <button id="addFailed" class="btn" disabled>Download failed items</button>
         <button id="addToLabels" class="btn" disabled>Send names to Labels</button>
       </div>
       <div class="tablewrap"><table id="addTable" class="grid"></table></div>
@@ -83,6 +84,7 @@
         <label class="check"><input type="checkbox" id="chkOnlyFlagged" checked> Show flagged only</label>
         <span class="spacer"></span>
         <button id="chkExport" class="btn" disabled>Download Excel</button>
+        <button id="chkFailed" class="btn" disabled>Download failed items</button>
         <button id="chkApply" class="btn primary" disabled>Update ticked prices in PosPort</button>
       </div>
       <div class="tablewrap"><table id="chkTable" class="grid"></table></div>
@@ -98,6 +100,7 @@
           <div class="row">
             <label class="btn file">Load from Excel<input type="file" id="lblFile" accept=".xlsx,.xls,.csv"></label>
             <button id="lblClear" class="btn">Clear</button>
+            <button id="lblFailed" class="btn" disabled>Download failed items</button>
           </div>
         </div>
         <div class="step">

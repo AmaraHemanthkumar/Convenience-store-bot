@@ -58,6 +58,15 @@ Paste item names (one per line, exactly as in PosPort) or load them from Excel, 
 
 If the bot has already seen the PosPort ID of every item, it skips the ticking and opens the Print labels page with all of them directly.
 
+### Failed items Excel
+Each tab has a **Download failed items** button. It saves an Excel of everything that didn't work, with all the details the bot has:
+- why it failed;
+- whether the barcode's check digit is OK;
+- everything Woolworths and Coles returned (product, size, normal/special price, department, link, other close results);
+- the name from the barcode databases;
+- the closest PosPort items and the words that were searched;
+- ready-made Woolworths and Coles search links.
+
 ### Settings
 Here you can change:
 - the markup ($1.50);
