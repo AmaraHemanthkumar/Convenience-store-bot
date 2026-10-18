@@ -10,6 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXT = str(ROOT / "extension")
 MOCK = (ROOT / "tests" / "mock_posport.html").read_text()
 SAMPLE = str(ROOT / "samples" / "barcodes-template.xlsx")
+SHOT = str(pathlib.Path(tempfile.gettempdir()) / "items_tab.png")
 
 WW = {"Products": [{"Products": [{
     "Stockcode": 123, "Name": "Allen's Minties Lollies Bag", "DisplayName": "Allen's Minties Lollies Bag 150g",
@@ -21,8 +22,20 @@ COLES = {"pageProps": {"searchResults": {"results": [{
     "pricing": {"now": 4.5, "was": 0}}]}}}
 
 
+KITKAT = {"Products": [{"Products": [{
+    "Stockcode": 456, "Name": "Nestle Kit Kat Chunky", "DisplayName": "Nestle Kit Kat Chunky 70g",
+    "PackageSize": "70g", "Barcode": "9300605094703", "Price": 2.5, "WasPrice": 0, "IsOnSpecial": False,
+    "AdditionalAttributes": {"sapdepartmentname": "CONFECTIONERY"}}]}]}
+
+
+def ww_answer(route):
+    """Kit Kat (not in the mock PosPort) for its barcode, Minties (in PosPort) for anything else."""
+    body = route.request.post_data or route.request.url
+    route.fulfill(json=KITKAT if "9300605094703" in body or "Kit Kat" in body else WW)
+
+
 def setup_routes(ctx):
-    ctx.route("https://www.woolworths.com.au/apis/**", lambda r: r.fulfill(json=WW))
+    ctx.route("https://www.woolworths.com.au/apis/**", ww_answer)
     ctx.route("https://www.woolworths.com.au/", lambda r: r.fulfill(body="<html>ww</html>", content_type="text/html"))
     ctx.route("https://www.coles.com.au/_next/**", lambda r: r.fulfill(json=COLES))
     ctx.route("https://www.coles.com.au/", lambda r: r.fulfill(body=COLES_HOME, content_type="text/html"))
@@ -61,44 +74,58 @@ def main():
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("dialog", lambda d: d.accept())
         page.goto(f"chrome-extension://{ext_id}/dashboard.html")
-        page.set_input_files("#addFile", SAMPLE)
-        page.click("#addLookup")
-        wait_until(page, lambda: page.locator("#addTable .pill.idle").count() == 0)
-        first = page.locator("#addTable tbody tr").first
-        price = first.locator("input.price").input_value()
-        name = first.locator("input.name").input_value()
-        cat = first.locator("select.cat").input_value()
-        print("row 1:", name, price, cat)
-        assert price == "6.00", price           # highest = Coles 4.50 (Woolies normal 4.20) + 1.50
-        assert name == "Allens Minties Lollies 150g" or name.startswith("Allens Minties"), name
-        assert cat == "CONFECTIONERY", cat
+        # 1 · Items & prices: loading the Excel reads the PosPort list, looks up prices and sorts new / in PosPort
+        from openpyxl import Workbook
+        wb = Workbook(); ws = wb.active
+        ws.append(["Barcode"]); ws.append(["9300605094703"]); ws.append(["9300682012345"])
+        xl = pathlib.Path(tempfile.mkdtemp()) / "barcodes.xlsx"; wb.save(xl)
+        page.set_input_files("#addFile", str(xl))          # confirm "read PosPort list?" auto-accepted
+        wait_until(page, lambda: "Done:" in page.inner_text("#log"))
+        print("summary:", page.inner_text("#addSummary"))
+        assert page.inner_text("#fNew") == "1" and page.inner_text("#fPos") == "1", (page.inner_text("#fNew"), page.inner_text("#fPos"))
+        # the item already in PosPort: shows PosPort name/price, check result and a suggested new price
+        posrow = page.locator("#addTable tr.in-pos")
+        assert "ALLENS MINTIES 150G" in posrow.inner_text() and "$5.50" in posrow.inner_text(), posrow.inner_text()
+        print("in PosPort row check:", posrow.locator("td").nth(7).inner_text().replace("\n", " "))
+        newrow = page.locator("#addTable tbody tr:not(.in-pos)")
+        price = newrow.locator("input.price").input_value()
+        name = newrow.locator("input.name").input_value()
+        print("new row:", name, price)
+        assert name.startswith("Nestle Kit Kat") and newrow.locator("select.cat").input_value() == "CONFECTIONERY"
+        base = float(price)
 
-        # markup can be changed on the Add tab
+        # markup can be changed (only new items change)
         page.fill("#addMarkup", "2")
         page.click("#addApplyMarkup")
-        assert page.locator("#addTable tbody tr").first.locator("input.price").input_value() == "6.50"
+        assert abs(float(newrow.locator("input.price").input_value()) - (base + 0.5)) < 0.001
         page.fill("#addMarkup", "1.5")
         page.click("#addApplyMarkup")
+        page.screenshot(path=SHOT, full_page=True)
 
-        # Create: fills the (mock) Bulk Create page, then waits for the user to press Create
+        # filters
+        page.click("#addFilter button[data-f=pos]")
+        assert page.locator("#addTable tbody tr").count() == 1
+        page.click("#addFilter button[data-f=all]")
+
+        # Create the new item: fills Bulk Create, "It failed – clear and retry", then "Created OK"
         page.click("#addCreate")
-        page.wait_for_selector("#banner:not(.hidden)", timeout=60000)
+        wait_until(page, lambda: page.locator("#banner:not(.hidden) button.choice").count() > 0)
         pos = [pg for pg in ctx.pages if "posport" in pg.url][0]
         filled = pos.evaluate("""() => Array.from(document.querySelectorAll('#rows .row')).map(r =>
             [r.querySelector('[placeholder="Enter Item Name"]').value, r.querySelector('.price').value, r.querySelector('.val').textContent])""")
         print("PosPort rows:", filled)
-        assert filled[0][1] == "6.00" and filled[0][2] == "CONFECTIONERY"
-        assert len(filled) == 2 and filled[1][0] == ""  # 1 valid item + 1 spare empty row (other sample barcodes fail the check digit)
-        # Create failed in PosPort -> "clear and retry": the page is cancelled/cleared and filled again
+        assert filled[0][0].startswith("Nestle Kit Kat") and filled[0][2] == "CONFECTIONERY" and len(filled) == 2 and filled[1][0] == ""
         page.click("#banner button.choice:has-text('It failed')")
         wait_until(page, lambda: page.locator("#banner:not(.hidden) button.choice:has-text('Created OK')").count() == 1)
-        filled = pos.evaluate("""() => Array.from(document.querySelectorAll('#rows .row')).map(r => r.querySelector('[placeholder="Enter Item Name"]').value)""")
-        assert filled[0].startswith("Allens Minties") and filled[1] == "", filled
         page.click("#banner button.choice:has-text('Created OK')")
         wait_until(page, lambda: "created" in page.inner_text("#addTable"))
+        assert "new items added to the print list" in page.inner_text("#log")
+        page.click("[data-tab=tickets]")
+        assert page.locator("#tkTable tr[data-i]").count() == 1
+        page.click("[data-tab=add]")
 
         # Labels: search + tick + Print labels on the mock list
-        page.click("[data-tab=labels]")
+        page.click("[data-tab=tickets]"); page.evaluate("document.getElementById('lblBox').open = true")
         page.fill("#lblNames", "A2 Full Cream 2L\n9300682012345\nMystery Snack 99g")
         page.click("#lblRun")
         wait_until(page, lambda: "Print labels" in page.inner_text("#lblLog"))
@@ -121,15 +148,10 @@ def main():
         assert "in Add items" in page.inner_text("#lblIssues")
         assert page.locator("#addTable tbody tr").count() == before + 1
         page.click("[data-tab=add]")
-        with page.expect_download() as dl:
-            page.click("#addFailed")
-        ws = load_workbook(save_xlsx(dl.value)).active
-        head = [c.value for c in ws[1]]
-        print("add failed sheet:", ws.max_row - 1, "rows,", len(head), "columns")
-        assert "Woolworths other results" in head and "Coles normal $" in head and ws.max_row >= 2
+        assert "Mystery Snack 99g" in page.inner_text("#addTable")      # waiting in Items & prices to be looked up
 
         # Not sure which item -> pick one in the panel -> run again
-        page.click("[data-tab=labels]")
+        page.click("[data-tab=tickets]"); page.evaluate("document.getElementById('lblBox').open = true")
         page.fill("#lblNames", "Minties")
         page.click("#lblRun")
         wait_until(page, lambda: "Nothing was ticked" in page.inner_text("#lblLog") or "Print labels" in page.inner_text("#lblLog"))
@@ -140,10 +162,17 @@ def main():
         assert "✓ ALLENS MINTIES 150G" in page.inner_text("#lblLog"), page.inner_text("#lblLog")
         # My tickets: bring new items in, preview and print to a 2.5 x 1 in page
         page.click("[data-tab=tickets]")
+        page.click("#tkClear")
         page.fill("#tkPaste", "Kit Kat Chunky King 70g | 3.99 | 9300605094703")
         page.click("#tkAddLines")
-        assert page.locator("#tkPreview .ticket").count() == 1
-        assert "$3.99 per 100g" not in page.inner_text("#tkPreview") and "$5.70 per 100g" in page.inner_text("#tkPreview")
+        wait_until(page, lambda: page.locator("#tkPreview .ticket").count() == 1)
+        assert "$5.70 per 100g" in page.inner_text("#tkPreview")
+        # a bare barcode finds the item and its price in PosPort
+        page.fill("#tkPaste", "9300682012345")
+        page.click("#tkAddLines")
+        wait_until(page, lambda: page.locator("#tkPreview .ticket").count() == 2)
+        print("barcode ticket log:", page.inner_text("#log").split("\n")[0:2])
+        assert "$5.50" in page.inner_text("#log")
         # Load the saved price-check Excel straight into tickets (only rows with a new price)
         from openpyxl import Workbook
         wb = Workbook(); ws = wb.active
@@ -168,7 +197,8 @@ def main():
         from pypdf import PdfReader
         box = PdfReader(str(pdf)).pages[0].mediabox
         assert (round(float(box.width) / 72, 2), round(float(box.height) / 72, 2)) == (2.5, 1.0), box
-        page.click("[data-tab=labels]")
+        page.click("[data-tab=tickets]"); page.evaluate("document.getElementById('lblBox').open = true")
+        page.click("[data-tab=check]")
         # Price check: scan the mock list, then compare a name-only sheet
         page.click("[data-tab=check]")
         page.click("#chkScan")

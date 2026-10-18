@@ -10,10 +10,9 @@
   <header class="top">
     <div class="brand"><img src="icons/icon48.png" alt=""><span>Convenience Store Bot</span></div>
     <nav class="tabs" role="tablist">
-      <button class="tab active" data-tab="add" role="tab">1 · Add new items</button>
-      <button class="tab" data-tab="check" role="tab">2 · Price check</button>
-      <button class="tab" data-tab="labels" role="tab">3 · Labels</button>
-      <button class="tab" data-tab="tickets" role="tab">4 · My tickets</button>
+      <button class="tab active" data-tab="add" role="tab">1 · Items &amp; prices</button>
+      <button class="tab" data-tab="tickets" role="tab">2 · Tickets &amp; labels</button>
+      <button class="tab" data-tab="check" role="tab">Whole-shop price check</button>
       <button class="tab" data-tab="settings" role="tab">Settings</button>
     </nav>
   </header>
@@ -29,40 +28,49 @@
     <section id="tab-add" class="panel">
       <div class="steps">
         <div class="step">
-          <h3>Load barcodes</h3>
-          <p>Excel or CSV with a <b>Barcode</b> column. Optional columns: Name, Category, Price.</p>
-          <label class="btn file">Choose Excel file<input type="file" id="addFile" accept=".xlsx,.xls,.csv"></label>
+          <h3>1. Load barcodes</h3>
+          <p>Excel or CSV with a <b>Barcode</b> column (Name, Category, Price optional). The bot then looks up Woolworths &amp; Coles and checks which items you already have in PosPort.</p>
+          <label class="btn file primary">Choose Excel file<input type="file" id="addFile" accept=".xlsx,.xls,.csv"></label>
           <span id="addFileInfo" class="muted"></span>
+          <div class="row">
+            <button id="addLookup" class="btn small" disabled>Look up again</button>
+            <span id="addScanInfo" class="muted small-note"></span>
+          </div>
         </div>
         <div class="step">
-          <h3>Look up prices</h3>
-          <p>Checks Woolworths and Coles (normal price, not specials). Our price = highest + markup.</p>
+          <h3>2. Prices</h3>
+          <p>New items: highest supermarket price + markup. Items already in PosPort are flagged if less than <b class="lowLbl">$1.50</b> or more than <b class="highLbl">$2.00</b> above.</p>
           <div class="row">
             <label class="inline">Markup $ <input type="number" step="0.05" min="0" id="addMarkup" class="small-num"></label>
-            <button id="addApplyMarkup" class="btn small">Apply to table</button>
-          </div>
-          <div class="row">
-            <button id="addLookup" class="btn primary" disabled>Look up prices</button>
-            <button id="addRename" class="btn small" title="Make the label names again with the current length and shorthand list">Redo short names</button>
+            <button id="addApplyMarkup" class="btn small">Apply</button>
+            <button id="addRename" class="btn small" title="Make the names again with the current length and shorthand list">Redo names</button>
           </div>
         </div>
         <div class="step">
-          <h3>Check &amp; create</h3>
-          <p>Edit names, prices or categories below, then fill PosPort's Bulk Create page.</p>
+          <h3>3. Save to PosPort</h3>
           <div class="row">
-            <button id="addCats" class="btn">Load categories from PosPort</button>
-            <button id="addCreate" class="btn primary" disabled>Create in PosPort</button>
-            <button id="addRetry" class="btn" disabled title="Cancel the half-filled Bulk Create page and try the failed/unfinished rows again">Retry unfinished</button>
+            <button id="addCreate" class="btn primary" disabled>Create new items</button>
+            <button id="addRetry" class="btn small" disabled title="Cancel the half-filled Bulk Create page and try the failed/unfinished rows again">Retry unfinished</button>
           </div>
+          <div class="row">
+            <button id="addUpdate" class="btn primary" disabled>Update ticked prices</button>
+            <button id="addTickFlagged" class="btn small" disabled>Tick all flagged</button>
+          </div>
+          <div class="row"><button id="addCats" class="btn small">Load categories from PosPort</button></div>
         </div>
       </div>
       <div class="toolbar">
-        <span id="addSummary" class="muted">No items loaded.</span>
+        <div class="seg" id="addFilter">
+          <button data-f="all" class="on">All <span id="fAll"></span></button>
+          <button data-f="new">New – not in PosPort <span id="fNew"></span></button>
+          <button data-f="pos">Already in PosPort <span id="fPos"></span></button>
+          <button data-f="attn">Needs attention <span id="fAttn"></span></button>
+        </div>
+        <span id="addSummary" class="muted"></span>
         <span class="spacer"></span>
-        <button id="addExport" class="btn" disabled>Download comparison Excel</button>
-        <button id="addFailed" class="btn" disabled>Download failed items</button>
-        <button id="addToLabels" class="btn" disabled>Send names to Labels</button>
-        <button id="addToTickets" class="btn" disabled>Make my own tickets</button>
+        <button id="addExport" class="btn small" disabled>Download Excel</button>
+        <button id="addFailed" class="btn small" disabled>Download failed items</button>
+        <button id="addToTickets" class="btn small" disabled>Make tickets</button>
       </div>
       <div class="tablewrap"><table id="addTable" class="grid"></table></div>
     </section>
@@ -85,7 +93,7 @@
         </div>
         <div class="step">
           <h3>Compare</h3>
-          <p>Flags items less than <b id="lowLbl">$1.50</b> or more than <b id="highLbl">$2.00</b> above the highest supermarket price.</p>
+          <p>Flags items less than <b class="lowLbl">$1.50</b> or more than <b class="highLbl">$2.00</b> above the highest supermarket price.</p>
           <button id="chkLookup" class="btn primary" disabled>Compare prices</button>
         </div>
       </div>
@@ -100,45 +108,22 @@
       <div class="tablewrap"><table id="chkTable" class="grid"></table></div>
     </section>
 
-    <!-- ================= LABELS ================= -->
-    <section id="tab-labels" class="panel hidden">
-      <div class="steps two">
-        <div class="step">
-          <h3>Items to label</h3>
-          <p>One item name or barcode per line.</p>
-          <textarea id="lblNames" rows="12" placeholder="Allens Minties 150g&#10;A2 Full Cream 2L"></textarea>
-          <div class="row">
-            <label class="btn file">Load from Excel<input type="file" id="lblFile" accept=".xlsx,.xls,.csv"></label>
-            <button id="lblClear" class="btn">Clear</button>
-            <button id="lblFailed" class="btn" disabled>Download failed items</button>
-          </div>
-        </div>
-        <div class="step">
-          <h3>Make labels</h3>
-          <p>The bot searches each name in Catalog › Items, ticks its checkbox, then presses <b>Print labels</b>. You then pick the label stock and press Print in PosPort.</p>
-          <button id="lblRun" class="btn primary">Tick items &amp; open Print labels</button>
-          <ul id="lblLog" class="log"></ul>
-        </div>
-      </div>
-      <div id="lblIssues" class="issues hidden"></div>
-    </section>
-
     <!-- ================= MY TICKETS ================= -->
     <section id="tab-tickets" class="panel hidden">
       <div class="steps">
         <div class="step">
           <h3>Items</h3>
-          <p>Bring items in from the other tabs, or paste lines like <code>Name | Price | Barcode</code>.</p>
+          <p>Bring items in, load an Excel, or paste lines: <code>Name | Price | Barcode</code> or just a <b>barcode</b> (the bot finds the item and its price in PosPort).</p>
           <div class="row">
-            <button id="tkFromAdd" class="btn small">From new items</button>
-            <button id="tkFromCheck" class="btn small">From price check</button>
-            <button id="tkFromLabels" class="btn small">From Labels list</button>
+            <button id="tkFromAdd" class="btn small">From Items &amp; prices</button>
+            <button id="tkFromCheck" class="btn small">From whole-shop check</button>
+            <button id="tkFromLabels" class="btn small hidden">From Labels list</button>
           </div>
           <div class="row">
             <label class="btn small file primary-outline">Load Excel / CSV<input type="file" id="tkFile" accept=".xlsx,.xls,.csv"></label>
             <span class="muted small-note">e.g. the saved price-check Excel</span>
           </div>
-          <textarea id="tkPaste" rows="3" placeholder="Allens Minties 150g | 5.70 | 9300682012345"></textarea>
+          <textarea id="tkPaste" rows="3" placeholder="Allens Minties 150g | 5.70 | 9300682012345&#10;9300605094703"></textarea>
           <div class="row"><button id="tkAddLines" class="btn small">Add these lines</button><button id="tkClear" class="btn small">Clear all</button></div>
         </div>
         <div class="step">
@@ -171,6 +156,30 @@
         </div>
       </div>
       <div class="tablewrap tk-table"><table id="tkTable" class="grid"></table></div>
+      <details id="lblBox" class="lbl-box">
+        <summary>Print with PosPort's own label page instead</summary>
+        <p class="muted">The bot finds each item in Catalog › Items (by name, or by barcode → product name → key words + size), ticks it, and opens PosPort's <b>Print labels</b>.
+          <button id="tkToLabels" class="btn small">Use the ticket list</button></p>
+<div class="steps two">
+        <div class="step">
+          <h3>Items to label</h3>
+          <p>One item name or barcode per line.</p>
+          <textarea id="lblNames" rows="12" placeholder="Allens Minties 150g&#10;A2 Full Cream 2L"></textarea>
+          <div class="row">
+            <label class="btn file">Load from Excel<input type="file" id="lblFile" accept=".xlsx,.xls,.csv"></label>
+            <button id="lblClear" class="btn">Clear</button>
+            <button id="lblFailed" class="btn" disabled>Download failed items</button>
+          </div>
+        </div>
+        <div class="step">
+          <h3>Make labels</h3>
+          <p>The bot searches each name in Catalog › Items, ticks its checkbox, then presses <b>Print labels</b>. You then pick the label stock and press Print in PosPort.</p>
+          <button id="lblRun" class="btn primary">Tick items &amp; open Print labels</button>
+          <ul id="lblLog" class="log"></ul>
+        </div>
+      </div>
+      <div id="lblIssues" class="issues hidden"></div>
+          </details>
       <h3 class="tk-h">Preview</h3>
       <div id="tkPreview" class="tk-sheet"></div>
     </section>
@@ -189,6 +198,7 @@
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
         <label>Items per Bulk Create page<input type="number" id="s_batchSize"></label>
         <label class="check"><input type="checkbox" id="s_extraBlankRow"> Keep one extra empty row (Bulk Create bug)</label>
+        <label class="check"><input type="checkbox" id="s_autoTickets"> Put created items and changed prices on the print list automatically</label>
         <label class="check"><input type="checkbox" id="s_autoExportFailed"> Download the failed-items Excel automatically after each run</label>
         <label class="check"><input type="checkbox" id="s_autoCreate"> Press "Create" automatically (leave off until you trust it)</label>
         <label class="wide">Advanced: text patterns (JSON, only if PosPort renames buttons)

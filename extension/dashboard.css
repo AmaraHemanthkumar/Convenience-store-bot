@@ -160,3 +160,16 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
 .ticket.layout-compact .t-bc { height: calc(var(--th) * 0.2); }
 .primary-outline { border-color: var(--accent); color: var(--accent); }
 .small-note { font-size: 12px; }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--card); }
+.seg button { border: 0; background: none; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; color: var(--muted); border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.seg span { font-weight: 600; }
+.lbl-box { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 12px 0; }
+.lbl-box summary { cursor: pointer; font-weight: 600; }
+.pos-cell { font-size: 13px; }
+.pos-cell b { display: block; }
+.maybe { background: var(--warn-soft); border-radius: 6px; padding: 4px 6px; margin-top: 4px; font-size: 12px; }
+.maybe button { margin: 2px 2px 0 0; }
+tr.in-pos td { background: #fafcff; }

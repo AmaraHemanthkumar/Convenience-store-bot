@@ -86,15 +86,16 @@ function pause(text) {
 
 // ---------------- persistence ----------------
 async function loadAll() {
-  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts']);
+  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts', 'catalogueAt']);
   if (d.settings) S = Object.assign({}, S, d.settings);
   if (!S.namesV2) { if (S.nameMaxLength === 28) S.nameMaxLength = 60; S.namesV2 = true; chrome.storage.local.set({ settings: S }); }
   if (d.categories && d.categories.length) categories = d.categories;
   ['add', 'check', 'checkInput', 'catalogue', 'tickets'].forEach((k) => { if (Array.isArray(d[k])) state[k] = d[k]; });
   if (d.tkOpts) state.tkOpts = d.tkOpts;
+  state.catalogueAt = d.catalogueAt || 0;
 }
 function saveState() {
-  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts });
+  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts, catalogueAt: state.catalogueAt || 0 });
 }
 
 // ---------------- browser tabs ----------------
@@ -265,69 +266,121 @@ function storeCell(s) {
 // 1. ADD NEW ITEMS
 // =====================================================================
 function addStatusPill(r) {
-  const map = { waiting: 'idle', ready: 'ok', check: 'warn', exists: 'warn', 'not found': 'bad', created: 'ok', filled: 'warn', error: 'bad', skipped: 'idle' };
-  return '<span class="pill ' + (map[r.status] || 'idle') + '" title="' + esc(r.note || '') + '">' + esc(r.status) + '</span>';
+  if (r.pos) {
+    if (r.updated === true) return '<span class="pill ok">price updated</span>';
+    if (r.updated === false) return '<span class="pill bad" title="' + esc(r.note || '') + '">update failed</span>';
+    return '<span class="pill idle">in PosPort</span>';
+  }
+  const map = { waiting: 'idle', ready: 'ok', check: 'warn', 'not found': 'bad', created: 'ok', filled: 'warn', error: 'bad', skipped: 'idle' };
+  return '<span class="pill ' + (map[r.status] || 'idle') + '" title="' + esc(r.note || '') + '">' + esc(r.status === 'ready' ? 'new – ready' : r.status) + '</span>';
+}
+
+const needsAttention = (r) => ['not found', 'error', 'check', 'filled'].includes(r.status) || !!r.maybe || r.updated === false ||
+  (r.pos && r.chk && r.chk.flagged && r.updated !== true);
+const inFilter = (r) => {
+  const f = state.addFilter || 'all';
+  return f === 'all' || (f === 'new' && !r.pos) || (f === 'pos' && !!r.pos) || (f === 'attn' && needsAttention(r));
+};
+
+function checkPill(r) {
+  if (!r.chk) return '';
+  const cls = r.chk.status === 'OK' ? 'ok' : r.chk.status === 'NO DATA' ? 'idle' : 'bad';
+  const d = r.chk.diff === null || r.chk.diff === undefined ? '' : '<span class="sub">' + (r.chk.diff < 0 ? '−' : '+') + '$' + Math.abs(r.chk.diff).toFixed(2) + ' vs highest</span>';
+  return '<span class="pill ' + cls + '">' + esc(r.chk.status) + '</span>' + d;
 }
 
 function renderAdd() {
   const t = $('addTable');
-  if (!state.add.length) { t.innerHTML = ''; $('addSummary').textContent = 'No items loaded.'; return; }
+  const counts = { all: state.add.length, new: state.add.filter((r) => !r.pos).length, pos: state.add.filter((r) => r.pos).length, attn: state.add.filter(needsAttention).length };
+  $('fAll').textContent = counts.all; $('fNew').textContent = counts.new; $('fPos').textContent = counts.pos; $('fAttn').textContent = counts.attn;
+  document.querySelectorAll('#addFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === (state.addFilter || 'all')));
+  if (!state.add.length) { t.innerHTML = ''; $('addSummary').textContent = 'No items loaded.'; refreshButtons(); return; }
   const catOpts = (sel) => ['<option value="">— choose —</option>'].concat(categories.map((c) => '<option' + (c === sel ? ' selected' : '') + '>' + esc(c) + '</option>')).join('');
-  t.innerHTML = '<thead><tr><th><input type="checkbox" id="addAll" checked></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th class="num">Highest</th><th class="num">Our price</th><th>Name in PosPort <span class="muted">/ on ticket</span></th><th>Category</th><th>Status</th></tr></thead><tbody>' +
-    state.add.map((r, i) => {
-      const len = (r.name || '').length;
-      const tlen = (r.tname || '').length;
-      return '<tr data-i="' + i + '">' +
-        '<td><input type="checkbox" class="use" ' + (r.use !== false ? 'checked' : '') + '></td>' +
+  const nameCell = (r) => {
+    const len = (r.name || '').length, tlen = (r.tname || '').length;
+    const ticket = '<div class="tname-row"><span class="muted">ticket</span><input type="text" class="tname" value="' + esc(r.tname || '') + '"><span class="count tcount' + (tlen > S.ticketNameMax ? ' over' : '') + '">' + tlen + '/' + S.ticketNameMax + '</span></div>';
+    if (r.pos) return '<div class="pos-cell"><b>' + esc(r.pos.name) + '</b><span class="sub">name in PosPort</span></div>' + ticket;
+    return '<input type="text" class="name" value="' + esc(r.name || '') + '"><span class="count' + (len > S.nameMaxLength ? ' over' : '') + '">' + len + '/' + S.nameMaxLength + '</span>' + ticket +
+      (r.net ? '<span class="sub">name: ' + esc(r.net.source) + '</span>' : '') +
+      (r.maybe ? '<div class="maybe">Already in PosPort as <b>' + esc(r.maybe.name) + '</b>' + (r.maybe.price ? ' (' + m(r.maybe.price) + ')' : '') + '?<br>' +
+        '<button class="btn small maybe-yes">Yes, same item</button><button class="btn small maybe-no">No, it\'s new</button></div>' : '');
+  };
+  const rows = state.add.map((r, i) => ({ r, i })).filter(({ r }) => inFilter(r));
+  t.innerHTML = '<thead><tr><th title="New items: create · In PosPort: update price"><input type="checkbox" id="addAll"></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th class="num">Highest</th><th class="num">Price</th><th>Name</th><th>Category / check</th><th>Status</th></tr></thead><tbody>' +
+    rows.map(({ r, i }) => {
+      const pos = !!r.pos;
+      return '<tr data-i="' + i + '"' + (pos ? ' class="in-pos"' : '') + '>' +
+        (pos ? '<td><input type="checkbox" class="apply" title="Update this price in PosPort" ' + (r.apply ? 'checked' : '') + '></td>'
+             : '<td><input type="checkbox" class="use" title="Create this item" ' + (r.use !== false ? 'checked' : '') + '></td>') +
         '<td>' + esc(r.barcode) + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
         '<td>' + storeCell(r.ww) + '</td><td>' + storeCell(r.coles) + '</td>' +
         '<td class="num">' + m(r.highest) + '</td>' +
-        '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '"></td>' +
-        '<td><input type="text" class="name" value="' + esc(r.name || '') + '"><span class="count' + (len > S.nameMaxLength ? ' over' : '') + '">' + len + '/' + S.nameMaxLength + '</span>' +
-          '<div class="tname-row"><span class="muted">ticket</span><input type="text" class="tname" value="' + esc(r.tname || '') + '"><span class="count tcount' + (tlen > S.ticketNameMax ? ' over' : '') + '">' + tlen + '/' + S.ticketNameMax + '</span></div>' +
-          (r.net ? '<span class="sub">name: ' + esc(r.net.source) + '</span>' : '') + '</td>' +
-        '<td><select class="cat">' + catOpts(r.category) + '</select></td>' +
+        (pos
+          ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">new price</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–"></td>'
+          : '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '"></td>') +
+        '<td>' + nameCell(r) + '</td>' +
+        '<td>' + (pos ? checkPill(r) : '<select class="cat">' + catOpts(r.category) + '</select>') + '</td>' +
         '<td>' + addStatusPill(r) + '</td></tr>';
     }).join('') + '</tbody>';
   const done = state.add.filter((r) => r.status !== 'waiting').length;
-  const ready = state.add.filter((r) => r.status === 'ready' || r.status === 'check').length;
-  const nf = state.add.filter((r) => r.status === 'not found').length;
-  $('addSummary').textContent = state.add.length + ' barcodes · ' + done + ' looked up · ' + ready + ' ready · ' + nf + ' not found (enter those by hand)';
+  const ready = state.add.filter((r) => !r.pos && (r.status === 'ready' || r.status === 'check')).length;
+  const flagged = state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length;
+  $('addSummary').textContent = done + '/' + state.add.length + ' looked up · ' + ready + ' new ready to create · ' + flagged + ' PosPort prices flagged';
   refreshButtons();
 }
+
+$('addFilter').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-f]');
+  if (!b) return;
+  state.addFilter = b.dataset.f; renderAdd();
+});
 
 $('addTable').addEventListener('input', (e) => {
   const tr = e.target.closest('tr[data-i]');
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
-  if (e.target.classList.contains('name')) {
+  const c = e.target.classList;
+  if (c.contains('name')) {
     r.name = e.target.value; r.nameEdited = true;
-    const c = tr.querySelector('.count');
-    c.textContent = r.name.length + '/' + S.nameMaxLength;
-    c.classList.toggle('over', r.name.length > S.nameMaxLength);
-    if (!r.tnameEdited) {           // keep the ticket name following the PosPort name
-      r.tname = ticketNameOf(r.name, '');
-      tr.querySelector('.tname').value = r.tname;
-    }
+    const cnt = tr.querySelector('.count');
+    cnt.textContent = r.name.length + '/' + S.nameMaxLength;
+    cnt.classList.toggle('over', r.name.length > S.nameMaxLength);
+    if (!r.tnameEdited) { r.tname = ticketNameOf(r.name, ''); tr.querySelector('.tname').value = r.tname; }
   }
-  if (e.target.classList.contains('tname')) r.tnameEdited = true, r.tname = e.target.value;
-  if (e.target.classList.contains('tname') || e.target.classList.contains('name')) {
+  if (c.contains('tname')) { r.tnameEdited = true; r.tname = e.target.value; }
+  if (c.contains('tname') || c.contains('name')) {
     const tc = tr.querySelector('.tcount');
     tc.textContent = (r.tname || '').length + '/' + S.ticketNameMax;
     tc.classList.toggle('over', (r.tname || '').length > S.ticketNameMax);
   }
-  if (e.target.classList.contains('price')) { r.price = R.parseMoney(e.target.value); r.priceEdited = true; }
-  saveState();
+  if (c.contains('newprice')) {
+    r.newPrice = R.parseMoney(e.target.value);
+    r.apply = !!r.newPrice; tr.querySelector('.apply').checked = r.apply;
+  } else if (c.contains('price')) { r.price = R.parseMoney(e.target.value); r.priceEdited = true; }
+  saveState(); refreshButtons();
 });
 $('addTable').addEventListener('change', (e) => {
-  if (e.target.id === 'addAll') { state.add.forEach((r) => { r.use = e.target.checked; }); renderAdd(); saveState(); return; }
+  if (e.target.id === 'addAll') {
+    state.add.filter(inFilter).forEach((r) => { if (r.pos) r.apply = e.target.checked && !!r.newPrice; else r.use = e.target.checked; });
+    renderAdd(); saveState(); return;
+  }
   const tr = e.target.closest('tr[data-i]');
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
   if (e.target.classList.contains('cat')) r.category = e.target.value;
   if (e.target.classList.contains('use')) r.use = e.target.checked;
-  if ((r.status === 'not found' || (r.status === 'exists' && r.use)) && r.name && r.price && r.category) { r.status = 'ready'; renderAdd(); }
-  saveState();
+  if (e.target.classList.contains('apply')) r.apply = e.target.checked;
+  if (r.status === 'not found' && r.name && r.price && r.category) { r.status = 'ready'; renderAdd(); }
+  saveState(); refreshButtons();
+});
+$('addTable').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-i]');
+  if (!tr) return;
+  const r = state.add[+tr.dataset.i];
+  if (e.target.classList.contains('maybe-yes')) { markInPos(r, r.maybe); r.maybe = null; }
+  else if (e.target.classList.contains('maybe-no')) { r.maybe = null; r.notInPos = true; }
+  else return;
+  renderAdd(); saveState();
 });
 
 $('addFile').addEventListener('change', async (e) => {
@@ -335,11 +388,12 @@ $('addFile').addEventListener('change', async (e) => {
   if (!f) return;
   const rows = R.parseInputRows(await readSheet(f));
   state.add = rows.map((x) => { const r = { barcode: x.barcode, inName: x.name, hint: x.hint, name: '', tname: '', category: x.category, overridePrice: x.price, price: x.price, status: 'waiting', use: true }; setNames(r, x.name, ''); return r; });
+  state.addFilter = 'all';
   $('addFileInfo').textContent = f.name + ' — ' + rows.length + ' items';
   log('Loaded ' + rows.length + ' barcodes from ' + f.name);
   e.target.value = '';
   renderAdd(); saveState();
-  if (rows.length && confirm('Loaded ' + rows.length + ' barcodes. Look up Woolworths and Coles prices now?')) $('addLookup').click();
+  if (rows.length) $('addLookup').click();          // straight on: PosPort check + Woolworths/Coles
 });
 
 function applyMarkup(newMarkup) {
@@ -347,7 +401,7 @@ function applyMarkup(newMarkup) {
   chrome.storage.local.set({ settings: S });
   let n = 0;
   state.add.forEach((r) => {
-    if (r.priceEdited || r.overridePrice || !r.highest || r.status === 'created') return;
+    if (r.pos || r.priceEdited || r.overridePrice || !r.highest || r.status === 'created') return;
     r.price = R.newItemPrice(r.highest, S); n++;
   });
   $('s_markup').value = S.markup;
@@ -363,6 +417,7 @@ $('addMarkup').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('ad
 $('addRename').addEventListener('click', () => {
   let n = 0;
   state.add.forEach((r) => {
+    if (r.pos) { if (!r.tnameEdited) { r.tname = ticketNameOf(r.pos.name, ''); n++; } return; }
     if ((r.nameEdited && r.tnameEdited) || r.status === 'created') {
       if (r.status === 'created' && !r.tnameEdited && r.name) { r.tname = ticketNameOf(r.name, ''); n++; }
       return;
@@ -376,9 +431,59 @@ $('addRename').addEventListener('click', () => {
   log(n + ' names made again (names you typed yourself were kept).', 'ok');
 });
 
+// ---- is it already in PosPort? ----
+function markInPos(r, item) {
+  r.pos = { name: item.name, price: item.price, id: item.id || '' };
+  r.use = false;
+  const chk = R.checkExistingPrice(item.price, r.highest, S);
+  r.chk = chk;
+  if (!r.newPrice) r.newPrice = chk.flagged ? chk.suggested : null;
+  r.apply = false;
+  if (!r.tnameEdited) r.tname = ticketNameOf(item.name, '');
+}
+
+function findInPos(r) {
+  if (!state.catalogue.length) return { item: null };
+  if (r.barcode) {
+    const b = state.catalogue.find((c) => c.barcode && R.sameBarcode(c.barcode, r.barcode));
+    if (b) return { item: b, how: 'barcode' };
+  }
+  // Trust supermarket names that were matched by barcode; a name-only match is used only if nothing better
+  const names = [];
+  const stores = [r.ww, r.coles].filter((x) => x && x.found);
+  const sure = stores.filter((x) => x.match === 'barcode');
+  (sure.length ? sure : stores.slice(0, 1)).forEach((x) => names.push(x.name));
+  if (r.net) names.push([r.net.name, r.net.size].filter(Boolean).join(' '));
+  if (r.inName) names.push(r.inName);
+  if (r.hint) names.push(r.hint);
+  let best = null;
+  for (const n of names) {
+    const mm = R.posMatch(n, state.catalogue, (c) => c.name);
+    if (mm.item && mm.sure) return { item: mm.item, how: 'name' };
+    if (mm.item && mm.score >= 0.5 && (!best || mm.score > best.score)) best = mm;
+  }
+  return { item: null, maybe: best ? Object.assign({ score: best.score }, best.item) : null };
+}
+
+async function ensureCatalogue() {
+  const age = state.catalogueAt ? (Date.now() - state.catalogueAt) / 3600000 : Infinity;
+  if (state.catalogue.length && age < 12) return true;
+  const msg = state.catalogue.length ? 'Your PosPort item list was read ' + Math.round(age) + ' hours ago. Read it again so the bot knows exactly which items you already have? (about a minute)'
+    : 'Read your PosPort item list first, so the bot can tell which items you already have? (about a minute)';
+  if (!confirm(msg)) return false;
+  await scanCatalogue();
+  return state.catalogue.length > 0;
+}
+
 $('addLookup').addEventListener('click', async () => {
   setBusy(true);
   try {
+    // A second press looks everything up again (except items already created or updated)
+    if (!state.add.some((r) => ['waiting', 'error', 'not found'].includes(r.status))) {
+      state.add.forEach((r) => { if (r.status !== 'created' && r.updated !== true) { r.status = 'waiting'; r.pos = null; r.maybe = null; r.chk = null; } });
+    }
+    await ensureCatalogue();
+    $('addScanInfo').textContent = state.catalogue.length ? 'Checked against ' + state.catalogue.length + ' PosPort items' : 'PosPort not checked';
     let n = 0;
     for (const r of state.add) {
       if (stopRequested) break;
@@ -409,15 +514,73 @@ $('addLookup').addEventListener('click', async () => {
       if (r.barcode && !R.validBarcode(r.barcode)) { r.status = 'not found'; r.note = 'This barcode looks mistyped (check digit is wrong) - please re-scan it.'; }
       else if (!res.highest) { r.status = 'not found'; r.note = 'No price at Woolworths or Coles' + (r.net ? ' (name from ' + r.net.source + ')' : r.name ? ' (name from your sheet)' : ''); }
       else { r.status = unsure ? 'check' : 'ready'; r.note = unsure ? 'Matched by name – please check it is the same product' : ''; }
-      if (r.barcode && state.catalogue.some((c) => c.barcode && R.sameBarcode(c.barcode, r.barcode))) {
-        r.status = 'exists'; r.note = 'This barcode is already in PosPort (from the last scan). Change status by editing and ticking again if you still want it.';
-        r.use = false;
-      }
+      // already in PosPort?
+      const found = r.notInPos ? { item: null } : findInPos(r);
+      if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how; }
+      else if (found.maybe) r.maybe = found.maybe;
       renderAdd(); saveState();
     }
-    log('Price lookup finished.', 'ok');
+    const nPos = state.add.filter((r) => r.pos).length, nNew = state.add.length - nPos;
+    log('Done: ' + nNew + ' new items, ' + nPos + ' already in PosPort (' + state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length + ' prices flagged).', 'ok');
     if (S.autoExportFailed && state.add.some((r) => ADD_FAILED.includes(r.status))) $('addFailed').click();
-  } finally { setBusy(false); }
+  } finally { setBusy(false); renderAdd(); }
+});
+
+// ---- update prices of items that are already in PosPort ----
+async function updatePosPrice(posName, newPrice) {
+  if (!(await posGo('/catalog/items', 'items'))) return { ok: false, error: 'Items page did not open' };
+  const s = await pos('searchList', posName, S.delayMs);
+  if (!s || !s.ok) return s || { ok: false, error: 'search failed' };
+  const o = await pos('openItem', posName, S.delayMs);
+  if (!o || !o.ok) return o || { ok: false, error: 'could not open the item' };
+  const tabId = await posTab();
+  await sleep(800); await waitComplete(tabId); await sleep(800);
+  return (await pos('setEditPrice', newPrice, S.delayMs)) || { ok: false, error: 'no answer' };
+}
+
+function toPrintList(items, what) {
+  if (S.autoTickets === false || !items.length) return;
+  addTickets(items, true);
+  saveState(); renderTickets();
+  log(items.length + ' ' + what + ' added to the print list (Tickets & labels tab).', 'ok');
+}
+
+$('addTickFlagged').addEventListener('click', () => {
+  let n = 0;
+  state.add.forEach((r) => { if (r.pos && r.chk && r.chk.flagged && r.newPrice && r.updated !== true) { r.apply = true; n++; } });
+  state.addFilter = 'pos'; renderAdd(); saveState();
+  log(n + ' flagged prices ticked – check the new prices, then press "Update ticked prices".');
+});
+
+$('addUpdate').addEventListener('click', async () => {
+  const todo = state.add.filter((r) => r.pos && r.apply && r.newPrice > 0);
+  if (!todo.length) { log('Tick the PosPort items to update and give them a new price.', 'err'); return; }
+  if (!confirm('Change the price of ' + todo.length + ' items in PosPort?\n\n' + todo.slice(0, 15).map((r) => r.pos.name + ': ' + m(r.pos.price) + ' → ' + m(r.newPrice)).join('\n') + (todo.length > 15 ? '\n…' : ''))) return;
+  setBusy(true);
+  const done = [];
+  try {
+    for (const r of todo) {
+      if (stopRequested) break;
+      log('Updating ' + r.pos.name + ' → ' + m(r.newPrice));
+      const res = await updatePosPrice(r.pos.name, r.newPrice);
+      r.updated = !!(res && res.ok);
+      r.note = r.updated ? 'was ' + m(r.pos.price) : (res && res.error) || 'unknown error';
+      if (r.updated) {
+        const c = state.catalogue.find((x) => x.name === r.pos.name);
+        if (c) c.price = r.newPrice;
+        r.pos.price = r.newPrice; r.apply = false;
+        r.chk = R.checkExistingPrice(r.newPrice, r.highest, S);
+        done.push({ full: r.pos.name, name: r.tname || ticketNameOf(r.pos.name, ''), price: r.newPrice, barcode: r.barcode });
+      }
+      log(r.pos.name + ': ' + (r.updated ? 'updated' : 'FAILED – ' + r.note), r.updated ? 'ok' : 'err');
+      renderAdd(); saveState();
+      if (!r.updated) {
+        const go = await pause('Could not update "' + r.pos.name + '": ' + r.note + '. Continue with the next item?');
+        if (!go) break;
+      }
+      await sleep(S.delayMs);
+    }
+  } finally { setBusy(false); toPrintList(done, 'changed prices'); }
 });
 
 $('addCats').addEventListener('click', async () => {
@@ -516,7 +679,12 @@ async function runCreate(retry) {
         await discardBulk(); resetBatch(); renderAdd(); saveState();
         continue;
       }
-      batch.forEach((it) => { if (it.status === 'filled') { it.status = 'created'; it.note = ''; } });
+      const made = batch.filter((it) => it.status === 'filled');
+      made.forEach((it) => { it.status = 'created'; it.note = ''; });
+      if (made.length) {
+        state.catalogue.push(...made.map((it) => ({ name: it.name, price: it.price, barcode: it.barcode })));
+        toPrintList(made.map((it) => ({ full: it.name, name: it.tname || ticketNameOf(it.name, ''), price: it.price, barcode: it.barcode })), 'new items');
+      }
       renderAdd(); saveState();
       start += S.batchSize; attempts = 0;
     }
@@ -542,7 +710,12 @@ $('addExport').addEventListener('click', () => {
     'Coles normal $': r.coles && r.coles.found ? r.coles.regular : '',
     'Coles special $': r.coles && r.coles.found && r.coles.onSpecial ? r.coles.now : '',
     'Highest $': r.highest || '',
-    'Our price $': r.price || '',
+    'Our price $': r.pos ? '' : (r.price || ''),
+    'In PosPort as': r.pos ? r.pos.name : (r.maybe ? 'maybe: ' + r.maybe.name : ''),
+    'PosPort price $': r.pos ? r.pos.price : '',
+    'Check': r.chk ? r.chk.status : '',
+    'New price $': r.pos ? (r.newPrice || '') : '',
+    'Price updated': r.updated === true ? 'yes' : r.updated === false ? 'FAILED' : '',
     'Markup $': r.price && r.highest ? R.round2(r.price - r.highest) : '',
     Status: r.status,
     Note: r.note || '',
@@ -581,12 +754,7 @@ $('addFailed').addEventListener('click', () => {
 
 $('addToTickets').addEventListener('click', () => { $('tkFromAdd').click(); showTab('tickets'); });
 
-$('addToLabels').addEventListener('click', () => {
-  const names = state.add.filter((r) => r.status === 'created' || r.status === 'filled').map((r) => r.name);
-  const list = names.length ? names : state.add.filter((r) => r.name).map((r) => r.name);
-  $('lblNames').value = list.join('\n');
-  showTab('labels');
-});
+
 
 // =====================================================================
 // 2. PRICE CHECK
@@ -629,6 +797,7 @@ async function scanCatalogue() {
       seen.set(k, Object.assign(cur, { id: c.id, barcode: R.cleanBarcode(c.barcode), category: c.category }));
     });
     state.catalogue = Array.from(seen.values());
+    state.catalogueAt = Date.now();
     const withBc = state.catalogue.filter((c) => c.barcode).length;
     $('chkScanInfo').textContent = state.catalogue.length + ' items · ' + withBc + ' with barcode';
     log('Scanned ' + state.catalogue.length + ' PosPort items (' + withBc + ' with barcodes).', 'ok');
@@ -801,28 +970,15 @@ $('chkApply').addEventListener('click', async () => {
   if (!todo.length) { log('Tick the rows to update and give them a new price.', 'err'); return; }
   if (!confirm('Change the price of ' + todo.length + ' items in PosPort?\n\n' + todo.slice(0, 15).map((r) => r.posName + ': ' + m(r.ours) + ' → ' + m(r.newPrice)).join('\n') + (todo.length > 15 ? '\n…' : ''))) return;
   setBusy(true);
+  const chkDone = [];
   try {
     for (const r of todo) {
       if (stopRequested) break;
       log('Updating ' + r.posName + ' → ' + m(r.newPrice));
-      let res;
-      if (!(await posGo('/catalog/items', 'items'))) { res = { ok: false, error: 'Items page did not open' }; }
-      else {
-        const s = await pos('searchList', r.posName, S.delayMs);
-        if (!s || !s.ok) res = s;
-        else {
-          const o = await pos('openItem', r.posName, S.delayMs);
-          if (!o || !o.ok) res = o;
-          else {
-            const tabId = await posTab();
-            await sleep(800); await waitComplete(tabId); await sleep(800);
-            res = await pos('setEditPrice', r.newPrice, S.delayMs);
-          }
-        }
-      }
+      const res = await updatePosPrice(r.posName, r.newPrice);
       r.applied = !!(res && res.ok);
       r.note = res && res.ok ? 'was ' + (res.old || r.ours) : (res && res.error) || 'unknown error';
-      if (r.applied) { r.ours = r.newPrice; r.apply = false; }
+      if (r.applied) { r.ours = r.newPrice; r.apply = false; chkDone.push({ full: r.posName, name: ticketNameOf(r.posName, ''), price: r.newPrice, barcode: r.barcode }); }
       log(r.posName + ': ' + (r.applied ? 'updated' : 'FAILED – ' + r.note), r.applied ? 'ok' : 'err');
       renderCheck(); saveState();
       if (!r.applied) {
@@ -831,7 +987,7 @@ $('chkApply').addEventListener('click', async () => {
       }
       await sleep(S.delayMs);
     }
-  } finally { setBusy(false); }
+  } finally { setBusy(false); toPrintList(chkDone, 'changed prices'); }
 });
 
 // =====================================================================
@@ -1241,9 +1397,11 @@ function loadTkOptsVisibility() {
 }
 
 $('tkFromAdd').addEventListener('click', () => {
-  const rows = state.add.filter((r) => r.use !== false && r.name && r.price && ['created', 'filled', 'ready', 'check'].includes(r.status));
-  if (!rows.length) { log('No new items with a name and price yet.', 'err'); return; }
-  addTickets(rows.map((r) => {
+  const posRows = state.add.filter((r) => r.pos);
+  const rows = state.add.filter((r) => !r.pos && r.use !== false && r.name && r.price && ['created', 'filled', 'ready', 'check'].includes(r.status));
+  if (!rows.length && !posRows.length) { log('No items with a name and price yet.', 'err'); return; }
+  if (posRows.length) addTickets(posRows.map((r) => ({ full: r.pos.name, name: r.tname || ticketNameOf(r.pos.name, ''), price: r.pos.price, barcode: r.barcode })), !rows.length ? false : true);
+  if (rows.length) addTickets(rows.map((r) => {
     const src = (r.ww && r.ww.found && r.ww) || (r.coles && r.coles.found && r.coles) || r.net || {};
     return { full: r.name, name: r.tname || ticketNameOf(r.name, ''), price: r.price, barcode: r.barcode, size: sizeFromName(r.name) || src.size || '' };
   }));
@@ -1331,20 +1489,62 @@ $('tkFile').addEventListener('change', async (e) => {
   log('Loaded ' + items.length + ' items from ' + f.name + ' (' + (state.tickets.length - before) + ' new tickets)' + (noPrice ? ' – ' + noPrice + ' have no price, type it in the table.' : '.'), noPrice ? 'err' : 'ok');
 });
 
-$('tkAddLines').addEventListener('click', () => {
-  const items = $('tkPaste').value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+// A pasted line can be "Name | Price | Barcode", or only a barcode: then the bot finds the item
+// in PosPort (barcode → product name → matching PosPort item and its price).
+async function ticketFromBarcode(bc) {
+  const byBc = state.catalogue.find((c) => c.barcode && R.sameBarcode(c.barcode, bc));
+  if (byBc) return { full: byBc.name, price: byBc.price, barcode: bc };
+  const fromAdd = state.add.find((r) => r.barcode && R.sameBarcode(r.barcode, bc) && (r.pos || r.status === 'created'));
+  if (fromAdd) return { full: fromAdd.pos ? fromAdd.pos.name : fromAdd.name, price: fromAdd.pos ? fromAdd.pos.price : fromAdd.price, barcode: bc };
+  const id = await identifyBarcode(bc);
+  if (!id) return { error: 'not found anywhere' };
+  if (state.catalogue.length) {
+    const mm = R.posMatch(id.name, state.catalogue, (c) => c.name);
+    if (mm.item && mm.sure) return { full: mm.item.name, price: mm.item.price, barcode: bc };
+  }
+  return { full: R.shortName(id.name, '', S.nameMaxLength), price: null, barcode: bc, note: 'not found in PosPort – type the price' };
+}
+
+$('tkAddLines').addEventListener('click', async () => {
+  const lines = $('tkPaste').value.split('\n').map((l) => l.trim()).filter(Boolean);
+  const items = [], codes = [];
+  lines.forEach((l) => {
+    const flat = l.replace(/\s/g, '');
+    if (/^\d{7,14}$/.test(flat)) { codes.push(flat); return; }
     const parts = l.split(/\s*[|\t;]\s*/);
     const name = parts[0];
     const price = parts.slice(1).map(R.parseMoney).find((x) => x !== null && x < 1000);
     const barcode = (parts.slice(1).find((x) => /^\d{7,14}$/.test(x.replace(/\s/g, ''))) || '').replace(/\s/g, '');
-    return { name, price, barcode };
+    items.push({ name, price, barcode });
   });
-  addTickets(items);
+  if (items.length) addTickets(items);
   $('tkPaste').value = '';
+  if (!codes.length) return;
+  setBusy(true);
+  try {
+    if (!state.catalogue.length) await ensureCatalogue();
+    const got = [];
+    for (const bc of codes) {
+      if (stopRequested) break;
+      const t = await ticketFromBarcode(bc);
+      if (t.error) { log(bc + ': ' + t.error, 'err'); continue; }
+      log(bc + ' → ' + t.full + (t.price ? ' ' + m(t.price) : '') + (t.note ? ' (' + t.note + ')' : ''), t.note ? 'err' : 'ok');
+      got.push({ full: t.full, name: $('tkShorten').checked ? ticketNameOf(t.full, '') : t.full, price: t.price, barcode: t.barcode });
+    }
+    addTickets(got);
+  } finally { setBusy(false); }
 });
+
 $('tkReshort').addEventListener('click', () => {
   state.tickets.forEach((x) => { if (!x.nameEdited) x.name = $('tkShorten').checked ? ticketNameOf(x.full || x.name, '') : (x.full || x.name); });
   saveState(); renderTickets();
+});
+$('tkToLabels').addEventListener('click', () => {
+  const list = state.tickets.filter((x) => x.use !== false).map((x) => x.full || x.name);
+  if (!list.length) { log('The ticket list is empty.', 'err'); return; }
+  $('lblNames').value = list.join('\n');
+  $('lblBox').open = true;
+  $('lblNames').scrollIntoView({ block: 'center' });
 });
 $('tkClear').addEventListener('click', () => {
   if (state.tickets.length && !confirm('Remove all ' + state.tickets.length + ' tickets from the list?')) return;
@@ -1393,19 +1593,21 @@ function fillSettings() {
   $('s_extraBlankRow').checked = !!S.extraBlankRow;
   $('s_autoCreate').checked = !!S.autoCreate;
   $('s_shortInPosPort').checked = !!S.shortInPosPort;
+  $('s_autoTickets').checked = S.autoTickets !== false;
   $('s_autoExportFailed').checked = S.autoExportFailed !== false;
   $('s_selectors').value = S.selectors && Object.keys(S.selectors).length ? JSON.stringify(S.selectors, null, 2) : '';
   $('s_abbrevs').value = S.abbrevs || '';
   $('addMarkup').value = Number(S.markup).toFixed(2);
   R.setAbbreviations(S.abbrevs || '');
-  $('lowLbl').textContent = m(S.flagLow);
-  $('highLbl').textContent = m(S.flagHigh);
+  document.querySelectorAll('.lowLbl').forEach((x) => { x.textContent = m(S.flagLow); });
+  document.querySelectorAll('.highLbl').forEach((x) => { x.textContent = m(S.flagHigh); });
 }
 $('sSave').addEventListener('click', async () => {
   NUM_KEYS.forEach((k) => { const v = parseFloat($('s_' + k).value); if (isFinite(v)) S[k] = v; });
   S.extraBlankRow = $('s_extraBlankRow').checked;
   S.autoCreate = $('s_autoCreate').checked;
   S.shortInPosPort = $('s_shortInPosPort').checked;
+  S.autoTickets = $('s_autoTickets').checked;
   S.autoExportFailed = $('s_autoExportFailed').checked;
   S.abbrevs = $('s_abbrevs').value;
   const raw = $('s_selectors').value.trim();
@@ -1432,6 +1634,7 @@ $('sTest').addEventListener('click', async () => {
 // UI plumbing
 // =====================================================================
 function showTab(name) {
+  if (name === 'labels') { name = 'tickets'; $('lblBox').open = true; }
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('hidden', p.id !== 'tab-' + name));
   if (name === 'tickets') renderTickets();
@@ -1440,12 +1643,13 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 
 function refreshButtons() {
   if (busy) return;
-  $('addLookup').disabled = !state.add.some((r) => r.status === 'waiting' || r.status === 'error' || r.status === 'not found');
+  $('addLookup').disabled = !state.add.length;
+  $('addUpdate').disabled = !state.add.some((r) => r.pos && r.apply && r.newPrice > 0);
+  $('addTickFlagged').disabled = !state.add.some((r) => r.pos && r.chk && r.chk.flagged && r.newPrice && r.updated !== true);
   $('addCreate').disabled = !state.add.some((r) => r.status === 'ready' || r.status === 'check');
   $('addRetry').disabled = !state.add.some((r) => r.status === 'error' || r.status === 'filled');
   $('addExport').disabled = !state.add.some((r) => r.status !== 'waiting');
-  $('addToLabels').disabled = !state.add.some((r) => r.name);
-  $('addToTickets').disabled = !state.add.some((r) => r.name && r.price);
+  $('addToTickets').disabled = !state.add.some((r) => (r.name && r.price) || r.pos);
   $('chkLookup').disabled = !state.checkInput.length;
   $('chkExport').disabled = !state.check.length;
   $('chkApply').disabled = !state.check.some((r) => r.apply);

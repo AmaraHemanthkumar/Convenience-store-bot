@@ -29,35 +29,30 @@ After you download a newer version, press the ↻ reload button on the extension
 
 Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths, Coles and PosPort in their own tabs and works in them, so leave those tabs open while it runs.
 
-### 1 · Add new items
-1. **Markup.** Set the markup at the top of *Look up prices* (default $1.50) and press **Apply to table**. Prices you typed yourself are kept.
-1. **Choose Excel file.** This is a sheet with a `Barcode` column (see `samples/barcodes-template.xlsx`). The optional `Name`, `Category` and `Price` columns override what the bot would choose.
-2. **Look up prices.** For each barcode the table shows:
-   - the Woolworths and Coles normal prices, with any special shown in orange;
-   - the highest of the two, and our price;
-   - the label name, with a character counter (28 fits a Dymo 25×54 mm label at Medium size);
-   - the category.
+### 1 · Items & prices (new items and price checks in one go)
+1. **Choose Excel file** with a `Barcode` column (Name, Category, Price optional). The bot then works through the list by itself:
+   - It reads your PosPort item list, if it hasn't in the last 12 hours.
+   - It looks up Woolworths and Coles normal prices, falling back to the free barcode databases when neither shop knows the barcode.
+   - It sorts every barcode into one of two groups:
+     - **New – not in PosPort:** our price is the highest price + markup, the name is the real product name, and a short ticket name and category are made for you.
+     - **Already in PosPort:** shows the PosPort name and price, **TOO LOW / TOO HIGH / OK** against the highest supermarket price, and a suggested new price.
+   - If it's unsure, it asks: *"Already in PosPort as …? Yes, same item / No, it's new"*.
+2. Use the filters (**All · New · Already in PosPort · Needs attention**) and edit anything you like. The **Markup $** box changes all new prices at once.
+3. Save to PosPort:
+   - **Create new items** fills Bulk Create (with one spare row). See *If creating fails* below.
+   - **Update ticked prices** changes prices of items already in PosPort. **Tick all flagged** ticks every TOO LOW / TOO HIGH item.
+4. Created items and changed prices go onto the **print list** in *Tickets & labels* automatically (you can switch this off in Settings).
 
-   **check** means the product was matched by name rather than by barcode, so make sure it's the same item. **not found** means you need to type the price and name yourself. **exists** means the barcode is already in PosPort, according to the last scan in Price check.
-3. Edit anything you like in the table.
-4. **Load categories from PosPort** reads the real category list from Bulk Create. You only need to do this once, or again after you add categories.
-5. **Create in PosPort** opens Bulk Create, adds rows (plus one spare empty row, because of the bug), and fills the name, barcode, price and category. Variants and modifiers are left empty. The bot then **stops and waits for you to press Create** in PosPort. Once you trust it, tick *Press "Create" automatically* in Settings.
-6. **Download comparison Excel** saves the cross-check sheet.
-7. **Send names to Labels** passes the new items straight to the Labels tab.
+**Download Excel** saves the full comparison, and **Download failed items** saves everything that needs a hand-check.
 
-### If creating fails
-- **A row can't be filled:** the bot asks whether to **Retry this batch**, **Skip that item and retry**, or **Stop**. Retrying first cancels the half-filled Bulk Create page.
-- **After you press Create in PosPort:** answer **Created OK**, or **It failed – clear and retry**.
-- **Later:** the **Retry unfinished** button (next to *Create in PosPort*) cancels any half-filled page and redoes every row that failed or was never confirmed as created.
-
-### 2 · Price check
+### Whole-shop price check
 1. **Scan PosPort items** goes through Catalog › Items page by page. Tip: set *Rows per page* to the largest number first, so there are fewer pages.
 2. Choose what to check: either **an Excel of barcodes** (it can include a `Name` column), or **Use all scanned items**.
 3. **Compare prices.** Flagged rows are marked TOO LOW or TOO HIGH, and **New price** is filled in with highest + $1.50. Change any new price you want, and tick the rows to update.
 4. **Download Excel** saves the list.
 5. **Update ticked prices in PosPort** opens each item and sets the new price. It shows you the full list before it starts.
 
-### 3 · Labels
+### PosPort's own label page (inside *Tickets & labels*)
 PosPort's search only looks at item names, not barcodes. So for each barcode line the bot first works out what the product is (Woolworths, then Coles, then the free barcode databases). It then searches PosPort with the product's key words and picks the item whose words **and size** match. The log shows which item it picked and how sure it was. If it isn't sure, it leaves the item unticked and shows the closest names, so you can paste the exact one. Running **Price check → Scan PosPort items** first makes this faster and more accurate.
 
 Paste item names (one per line, exactly as in PosPort) or load them from Excel, then press **Tick items & open Print labels**.
@@ -96,7 +91,7 @@ Each tab has a **Download failed items** button, and the file also downloads aut
 
 Both are shown in the Add table and you can edit either one. To save the short name in PosPort as well, tick the option in Settings.
 
-### 4 · My tickets (print your own shelf tickets)
+### 2 · Tickets & labels (print your own shelf tickets)
 These are made by the bot itself, so you don't need PosPort's label page:
 - **Sizes:** 2.5 or 3 inches wide, 1 or 1.25 inches tall, or any custom size.
 - **On each ticket:** the name (as large as fits on 2 lines), a big price, the size, the unit price (e.g. $6.32 per 100g), and a scannable barcode (EAN-13/EAN-8/UPC; anything else is drawn as Code 128). Optionally the shop name and date.
@@ -105,7 +100,11 @@ These are made by the bot itself, so you don't need PosPort's label page:
   - **PosPort style** – price under the name, barcode centred, like the PosPort label page.
   - **Compact** – name and price side by side.
 - **Specials:** fill in **Was $** and the ticket gets a black SPECIAL tag with the old price crossed out.
-- **Where items come from:** new items, price-check changes, the Labels list, pasted lines like `Name | Price | Barcode`, or **Load Excel / CSV**.
+- **Where items come from:**
+  - added automatically after creating items or changing prices;
+  - **From Items & prices**;
+  - **Load Excel / CSV**;
+  - pasted lines: `Name | Price | Barcode`, or just a **barcode** (the bot finds the item and its price in PosPort).
   - *Load Excel / CSV* reads the Excel files the bot saved: price check, price updates, new-items comparison and failed items.
   - It also reads your own sheet with a name column and a price column (barcode, was-price and copies are optional).
   - For a price-check file it uses the **New price** where one is filled in, and asks whether to load only the items whose price changed.
