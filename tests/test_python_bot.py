@@ -40,3 +40,16 @@ with sync_playwright() as pw:
     assert back[0]["Barcode"] == "0930" and back[0]["Our price $"] == 6.0, back
     b.ctx.close()
 print("python bot tests passed")
+
+# barcode label: Woolworths name -> keyword search in PosPort -> tick
+with sync_playwright() as pw:
+    os.environ["CSB_PROFILE"] = tempfile.mkdtemp()
+    b = bot.Bot(pw)
+    setup_routes(b.ctx)
+    b.settings["delayMs"] = 100
+    b.pos_go("/catalog/items", "items")
+    name, src = b.identify("9300682012345")
+    r = b.tick_product(name, [])
+    assert r.get("ok") and r["name"] == "ALLENS MINTIES 150G", r
+    b.ctx.close()
+print("python barcode label test passed")

@@ -80,11 +80,12 @@ def main():
 
         # Labels: search + tick + Print labels on the mock list
         page.click("[data-tab=labels]")
-        page.fill("#lblNames", "A2 Full Cream 2L\nALLENS MINTIES 150G")
+        page.fill("#lblNames", "A2 Full Cream 2L\n9300682012345")
         page.click("#lblRun")
         wait_until(page, lambda: "Print labels" in page.inner_text("#lblLog"))
         print("labels log:", page.inner_text("#lblLog").replace("\n", " | "))
         assert "✓ A2 Full Cream 2L" in page.inner_text("#lblLog")
+        assert "✓ 9300682012345 → ALLENS MINTIES 150G" in page.inner_text("#lblLog")  # barcode -> Woolworths name -> keyword search
 
         # Price check: scan the mock list, then compare a name-only sheet
         page.click("[data-tab=check]")

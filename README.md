@@ -52,6 +52,8 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
 5. **Update ticked prices in PosPort** opens each item and sets the new price. It shows you the full list before it starts.
 
 ### 3 · Labels
+PosPort's search only looks at item names, not barcodes. So for each barcode line the bot first works out what the product is (Woolworths, then Coles, then the free barcode databases). It then searches PosPort with the product's key words and picks the item whose words **and size** match. The log shows which item it picked and how sure it was. If it isn't sure, it leaves the item unticked and shows the closest names, so you can paste the exact one. Running **Price check → Scan PosPort items** first makes this faster and more accurate.
+
 Paste item names (one per line, exactly as in PosPort) or load them from Excel, then press **Tick items & open Print labels**.
 
 If the bot has already seen the PosPort ID of every item, it skips the ticking and opens the Print labels page with all of them directly.

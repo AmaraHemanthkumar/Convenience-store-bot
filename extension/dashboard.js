@@ -476,8 +476,8 @@ function matchCatalogue(inp) {
   if (inp.name) {
     const exact = catalogueIndex().get(inp.name.toLowerCase());
     if (exact) return exact;
-    const best = R.bestMatch(inp.name, state.catalogue, (c) => c.name);
-    if (best.item && best.score >= 0.8) return best.item;
+    const best = R.posMatch(inp.name, state.catalogue, (c) => c.name);
+    if (best.item && best.sure) return best.item;
   }
   return null;
 }
@@ -543,10 +543,15 @@ $('chkLookup').addEventListener('click', async () => {
       const old = prev.get(key);
       if (old && old.highest && !old.applied) { state.check.push(old); continue; }
       n++;
-      const pm = matchCatalogue(inp);
-      const ours = inp.currentPrice !== null && inp.currentPrice !== undefined ? inp.currentPrice : (pm ? pm.price : null);
+      let pm = matchCatalogue(inp);
       log('Comparing ' + (pm ? pm.name : key) + ' (' + n + ')');
-      const res = await lookupPrices(inp.barcode, pm ? pm.name : inp.name);
+      const res = await lookupPrices(inp.barcode, pm ? pm.name : (inp.name || inp.hint));
+      if (!pm) {
+        // PosPort has no barcodes to match on: use the supermarket's name for the product
+        const src = (res.ww && res.ww.found && res.ww) || (res.coles && res.coles.found && res.coles);
+        if (src) { const m = R.posMatch(src.name, state.catalogue, (c) => c.name); if (m.item && m.sure) pm = m.item; }
+      }
+      const ours = inp.currentPrice !== null && inp.currentPrice !== undefined ? inp.currentPrice : (pm ? pm.price : null);
       const chk = R.checkExistingPrice(ours, res.highest, S);
       const unsure = [res.ww, res.coles].some((s) => s && s.found && s.match && s.match !== 'barcode');
       state.check.push({
@@ -641,6 +646,52 @@ $('lblFile').addEventListener('change', async (e) => {
 });
 $('lblClear').addEventListener('click', () => { $('lblNames').value = ''; $('lblLog').innerHTML = ''; });
 
+// What is this barcode? Woolworths, then Coles, then the open barcode databases.
+async function identifyBarcode(bc) {
+  const ww = await storeCall('ww', 'wwLookup', [bc, '']);
+  if (ww && ww.found && ww.match === 'barcode') return { name: ww.name, source: 'Woolworths' };
+  const co = await storeCall('coles', 'colesLookup', [bc, '']);
+  if (co && co.found && co.match === 'barcode') return { name: co.name, source: 'Coles' };
+  const net = await window.CSB_STORES.internetLookup(bc);
+  if (net && net.found) return { name: [net.name, net.size].filter(Boolean).join(' '), source: net.source };
+  if (ww && ww.found) return { name: ww.name, source: 'Woolworths (check)' };
+  if (co && co.found) return { name: co.name, source: 'Coles (check)' };
+  return null;
+}
+
+// Find a product in Catalog > Items and tick it. PosPort only searches names, so:
+// 1) the exact name, 2) the best match from the last full scan, 3) keyword searches checked by size + words.
+async function tickProduct(product) {
+  let s = await pos('searchList', product, S.delayMs);
+  if (s && s.ok) {
+    const t = await pos('tickRow', product, false);
+    if (t && t.ok) return { ok: true, name: t.name };
+  }
+  if (state.catalogue.length) {
+    const m = R.posMatch(product, state.catalogue, (c) => c.name);
+    if (m.item && m.sure) {
+      s = await pos('searchList', m.item.name, S.delayMs);
+      const t = await pos('tickRow', m.item.name, false);
+      if (t && t.ok) return { ok: true, name: t.name, score: m.score };
+    }
+  }
+  let best = null;
+  for (const word of R.searchWords(product)) {
+    s = await pos('searchList', word, S.delayMs);
+    const rows = (s && s.rows) || [];
+    const m = R.posMatch(product, rows, (r) => r.name);
+    if (m.item && (!best || m.score > best.score)) best = Object.assign({ word }, m);
+    if (m.item && m.sure) {
+      const t = await pos('tickRow', m.item.name, false);
+      if (t && t.ok) return { ok: true, name: t.name, score: m.score };
+    }
+  }
+  if (best && best.item) {
+    return { ok: false, error: 'not sure – closest is "' + best.item.name + '" (' + Math.round(best.score * 100) + '%)' + (best.runnerUp ? ' or "' + best.runnerUp.name + '"' : '') + '. Paste the exact name to use it.' };
+  }
+  return { ok: false, error: 'no item like "' + product + '" in PosPort' };
+}
+
 $('lblRun').addEventListener('click', async () => {
   const names = $('lblNames').value.split('\n').map((s) => s.trim()).filter(Boolean);
   if (!names.length) return;
@@ -675,12 +726,17 @@ $('lblRun').addEventListener('click', async () => {
     let ticked = 0;
     for (const w of wanted) {
       if (stopRequested) break;
-      const label = w.line === w.name ? w.name : w.line + ' (' + w.name + ')';
-      const byCode = isBarcode(w.name);
-      const s = await pos('searchList', w.name, S.delayMs);
-      if (!s || !s.ok) { lblLog('✗ ' + label + ': ' + (s && s.error), 'err'); continue; }
-      const t = await pos('tickRow', w.name, byCode);
-      if (t && t.ok) { ticked++; lblLog('✓ ' + label + (byCode ? ' → ' + t.name : ''), 'ok'); } else lblLog('✗ ' + label + ': ' + (t && t.error), 'err');
+      let product = w.name;
+      if (isBarcode(product)) {
+        // PosPort can't search barcodes: find out what the product is first
+        const id = await identifyBarcode(product);
+        if (!id) { lblLog('✗ ' + w.line + ': not found at Woolworths, Coles or the barcode databases – type its name instead', 'err'); continue; }
+        product = id.name;
+        lblLog('… ' + w.line + ' is "' + product + '" (' + id.source + ')');
+      }
+      const res = await tickProduct(product);
+      if (res.ok) { ticked++; lblLog('✓ ' + w.line + (res.name.toLowerCase() !== w.line.toLowerCase() ? ' → ' + res.name + (res.score ? ' (' + Math.round(res.score * 100) + '% match)' : '') : ''), 'ok'); }
+      else lblLog('✗ ' + w.line + ': ' + res.error, 'err');
       await sleep(S.delayMs / 2);
     }
     if (!ticked) { lblLog('Nothing was ticked.', 'err'); return; }

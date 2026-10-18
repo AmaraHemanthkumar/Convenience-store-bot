@@ -418,13 +418,21 @@ class Bot:
             if not pm and inp.get("name"):
                 pm = by_name.get(inp["name"].lower())
                 if not pm:
-                    b = self.rules("bestMatch", inp["name"], [c["name"] for c in cat])
-                    if b["item"] and b["score"] >= 0.8:
+                    b = self.rules("posMatch", inp["name"], [c["name"] for c in cat])
+                    if b["item"] and b["sure"]:
                         pm = by_name[b["item"].lower()]
             ours = inp.get("currentPrice") if inp.get("currentPrice") is not None else (pm or {}).get("price")
             label = (pm or {}).get("name") or inp.get("barcode")
             print(f"  [{n}/{len(inputs)}] {label} ...", end=" ", flush=True)
             ww, coles, highest = self.lookup(inp.get("barcode", ""), (pm or {}).get("name") or inp.get("name") or "")
+            if not pm:
+                srcp = ww if ww.get("found") else (coles if coles.get("found") else None)
+                if srcp:
+                    m = self.rules("posMatch", srcp["name"], [c["name"] for c in cat])
+                    if m.get("item") and m.get("sure"):
+                        pm = by_name[m["item"].lower()]
+                        if inp.get("currentPrice") is None:
+                            ours = pm.get("price")
             chk = self.rules("checkExistingPrice", ours, highest, self.settings)
             print(chk["status"])
             out.append((inp, pm, ours, ww, coles, highest, chk))
@@ -550,16 +558,68 @@ class Bot:
             return
         ticked = 0
         for line, nm in wanted:
-            s = self.pos("searchList", nm, self.settings["delayMs"])
-            t = self.pos("tickRow", nm, is_bc(nm)) if s.get("ok") else s
-            shown = line if line == nm else f"{line} ({nm})"
-            print(f"   {'OK ' if t.get('ok') else 'NO '} {shown}" + (f" -> {t.get('name')}" if t.get("ok") and is_bc(nm) else "")
-                  + ("" if t.get("ok") else f"  ({t.get('error')})"))
-            ticked += 1 if t.get("ok") else 0
+            product = nm
+            if is_bc(nm):
+                found = self.identify(nm)
+                if not found:
+                    print(f"   NO  {line}  (not found anywhere - type its name instead)")
+                    continue
+                product = found[0]
+                print(f"   ... {line} is \"{product}\" ({found[1]})")
+            res = self.tick_product(product, catalogue)
+            if res.get("ok"):
+                ticked += 1
+                extra = f" -> {res['name']}" if res["name"].lower() != line.lower() else ""
+                print(f"   OK  {line}{extra}")
+            else:
+                print(f"   NO  {line}  ({res.get('error')})")
         if ticked:
             r = self.pos("clickPrintLabels")
             self.pos_page().bring_to_front()
             print("  Pressed Print labels. Pick the label stock and press Print." if r.get("ok") else "  " + str(r.get("error")))
+
+    def identify(self, bc):
+        """What product is this barcode? Woolworths, Coles, then the open barcode databases."""
+        ww = self.store("ww", "wwLookup", bc, "")
+        if ww.get("found") and ww.get("match") == "barcode":
+            return ww["name"], "Woolworths"
+        co = self.store("coles", "colesLookup", bc, "")
+        if co.get("found") and co.get("match") == "barcode":
+            return co["name"], "Coles"
+        net = self.internet(bc)
+        if net.get("found"):
+            return " ".join(x for x in (net["name"], net.get("size", "")) if x), net["source"]
+        if ww.get("found"):
+            return ww["name"], "Woolworths (check)"
+        return None
+
+    def tick_product(self, product, catalogue):
+        """PosPort only searches names: exact name, then last scan, then keyword searches checked by size."""
+        d = self.settings["delayMs"]
+        if self.pos("searchList", product, d).get("ok"):
+            t = self.pos("tickRow", product, False)
+            if t.get("ok"):
+                return t
+        if catalogue:
+            m = self.rules("posMatch", product, [c["name"] for c in catalogue])
+            if m.get("item") and m.get("sure"):
+                self.pos("searchList", m["item"], d)
+                t = self.pos("tickRow", m["item"], False)
+                if t.get("ok"):
+                    return t
+        best = None
+        for word in self.rules("searchWords", product):
+            rows = self.pos("searchList", word, d).get("rows", [])
+            m = self.rules("posMatch", product, [r["name"] for r in rows])
+            if m.get("item") and (not best or m["score"] > best["score"]):
+                best = m
+            if m.get("item") and m.get("sure"):
+                t = self.pos("tickRow", m["item"], False)
+                if t.get("ok"):
+                    return t
+        if best and best.get("item"):
+            return {"ok": False, "error": f"not sure - closest is \"{best['item']}\" ({round(best['score'] * 100)}%). Paste the exact name to use it."}
+        return {"ok": False, "error": f"no item like \"{product}\" in PosPort"}
 
     # =====================================================================
     def settings_menu(self):

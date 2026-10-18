@@ -269,6 +269,57 @@
     return { item: best, score: round2(bestScore) };
   }
 
+  // ---------- finding a product in the PosPort item list ----------
+  const STOP = new Set(['the', 'and', 'with', 'of', 'a', 'in', 'pack', 'pk', 'bag', 'bottle', 'can', 'each', 'ea',
+    'box', 'tub', 'jar', 'share', 'value', 'block', 'bar', 'lollies', 'chocolate', 'choc', 'flavour', 'flavoured']);
+
+  function sizeOf(s) {
+    const m = String(s || '').match(new RegExp(SIZE_RE.source, 'ig'));
+    return m ? normaliseSize(m[m.length - 1]).toLowerCase() : '';
+  }
+
+  function wordSet(s) {
+    const t = tokens(s).filter((w) => !/^\d+(\.\d+)?(g|kg|ml|l|pk)?$/.test(w));
+    const set = new Set(t);
+    for (let i = 0; i < t.length - 1; i++) set.add(t[i] + t[i + 1]); // "kit kat" == "kitkat"
+    return { list: t, set };
+  }
+
+  // How well a PosPort item name fits the real product name (0..1). Sizes must agree when both have one.
+  function posScore(product, posName) {
+    const sp = sizeOf(product), sn = sizeOf(posName);
+    if (sp && sn && sp !== sn) return 0;
+    const P = wordSet(product), N = wordSet(posName);
+    if (!N.list.length) return 0;
+    const covered = N.list.filter((w) => P.set.has(w) || [...P.set].some((p) => p.length > 3 && (p.startsWith(w) || w.startsWith(p)))).length;
+    const cover = covered / N.list.length;                 // PosPort words found in the product name
+    const back = N.list.length ? P.list.filter((w) => N.set.has(w)).length / Math.max(1, P.list.length) : 0;
+    let score = 0.75 * cover + 0.25 * back;
+    if (sp && sn && sp === sn) score += 0.1;
+    return Math.max(0, Math.min(1, round2(score)));
+  }
+
+  // Pick the PosPort item for a product. Returns {item, score, runnerUp, sure}
+  function posMatch(product, candidates, getName) {
+    const name = getName || ((c) => (typeof c === 'string' ? c : c.name));
+    const ranked = (candidates || []).map((c) => ({ c, s: posScore(product, name(c)) }))
+      .filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
+    const top = ranked[0], second = ranked[1];
+    if (!top) return { item: null, score: 0, runnerUp: null, sure: false };
+    const gap = top.s - (second ? second.s : 0);
+    return { item: top.c, score: top.s, runnerUp: second ? second.c : null, sure: top.s >= 0.6 && gap >= 0.12 };
+  }
+
+  // Words to type into PosPort's search box (it only searches names): most distinctive first.
+  function searchWords(product) {
+    const t = tokens(String(product || '').replace(/[’'`]/g, '')).filter((w) => w.length > 2 && !STOP.has(w) && !/^\d/.test(w));
+    const brand = t[0];
+    const rest = t.slice(1).sort((a, b) => b.length - a.length);
+    const out = [];
+    [rest[0], brand, rest[1]].forEach((w) => { if (w && !out.includes(w)) out.push(w); });
+    return out;
+  }
+
   // ---------- spreadsheet input ----------
   // rows: array of arrays (first row may be a header). Returns [{barcode, name, category, price, currentPrice}]
   function parseInputRows(rows) {
@@ -310,7 +361,7 @@
   const api = {
     DEFAULT_SETTINGS, DEFAULT_CATEGORIES, round2, parseMoney, money, regularPrice,
     highestPrice, newItemPrice, checkExistingPrice, cleanBarcode, sameBarcode, validBarcode,
-    shortName, guessCategory, similarity, bestMatch, parseInputRows, normaliseSize,
+    shortName, guessCategory, similarity, bestMatch, posScore, posMatch, searchWords, sizeOf, parseInputRows, normaliseSize,
   };
   root.CSB_RULES = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
