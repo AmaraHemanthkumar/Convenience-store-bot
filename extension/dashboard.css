@@ -197,3 +197,7 @@ tr.fhead.open td { background: var(--accent-soft); }
 .grid input.posname { font-weight: 600; }
 .fhead-in { flex-wrap: nowrap; } .fmeta { flex: 1 1 auto; min-width: 0; } .fhead-in .btn { white-space: nowrap; }
 @media (max-width: 1200px) { .fhead-in { flex-wrap: wrap; } }
+.bad-txt { color: var(--bad) !important; font-weight: 600; }
+.inv-list { margin: 6px 0 10px; font-size: 13px; }
+.inv-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 2px 4px 2px 10px; margin: 3px 4px 0 0; }
+.inv-chip .fx { border: 0; background: none; cursor: pointer; color: var(--muted); }

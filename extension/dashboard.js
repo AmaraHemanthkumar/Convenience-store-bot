@@ -86,7 +86,7 @@ function pause(text) {
 
 // ---------------- persistence ----------------
 async function loadAll() {
-  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts', 'catalogueAt', 'buy', 'files']);
+  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts', 'catalogueAt', 'buy', 'files', 'invoices']);
   if (d.settings) S = Object.assign({}, S, d.settings);
   if (!S.namesV2) { if (S.nameMaxLength === 28) S.nameMaxLength = 60; S.namesV2 = true; chrome.storage.local.set({ settings: S }); }
   if (d.categories && d.categories.length) categories = d.categories;
@@ -94,9 +94,10 @@ async function loadAll() {
   if (d.tkOpts) state.tkOpts = d.tkOpts;
   state.catalogueAt = d.catalogueAt || 0;
   state.files = Array.isArray(d.files) ? d.files : [];
+  state.invoices = Array.isArray(d.invoices) ? d.invoices : [];
 }
 function saveState() {
-  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts, catalogueAt: state.catalogueAt || 0, buy: state.buy, files: state.files || [] });
+  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts, catalogueAt: state.catalogueAt || 0, buy: state.buy, files: state.files || [], invoices: state.invoices || [] });
 }
 
 // ---------------- browser tabs ----------------
@@ -251,6 +252,51 @@ function writeSheet(rows, filename, sheetName) {
 }
 
 // All the detail we have about one supermarket result, as spreadsheet columns.
+// ---------------- supplier invoices: the bot remembers every line it has read ----------------
+if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+const INV = window.CSB_INVOICE;
+let invIndex = null;
+function invoiceIndex() {
+  if (invIndex) return invIndex;
+  invIndex = { byBarcode: new Map(), byCode: new Map() };
+  // newest invoice wins
+  (state.invoices || []).slice().sort((a, b) => (a.loadedAt || 0) - (b.loadedAt || 0)).forEach((inv) => {
+    inv.items.forEach((it) => {
+      const rec = Object.assign({ supplier: inv.supplier, number: inv.number, date: inv.date }, it);
+      if (it.barcode) invIndex.byBarcode.set(R.cleanBarcode(it.barcode).replace(/^0+/, ''), rec);
+      if (it.code) invIndex.byCode.set(it.code, rec);
+    });
+  });
+  return invIndex;
+}
+function invoiceFor(barcode) {
+  const k = R.cleanBarcode(barcode || '').replace(/^0+/, '');
+  return k ? invoiceIndex().byBarcode.get(k) || null : null;
+}
+async function readInvoicePdf(file) {
+  const lines = await INV.pdfToLines(await file.arrayBuffer());
+  const inv = INV.parseInvoice(lines);
+  inv.file = file.name; inv.loadedAt = Date.now();
+  inv.id = 'inv-' + (inv.number || file.name) ;
+  if (!inv.items.length) throw new Error('No item lines found in ' + file.name + ' – is it a text PDF from the supplier (not a scan)?');
+  state.invoices = (state.invoices || []).filter((x) => x.id !== inv.id).concat([inv]);
+  invIndex = null;
+  saveState(); renderInvoices();
+  if (state.add.some((r) => r.status === 'not found' && invoiceFor(r.barcode))) setTimeout(() => startLookup(), 0);
+  const diff = inv.printedTotal ? Math.abs(inv.printedTotal - inv.total) : 0;
+  log('Invoice ' + (inv.number || file.name) + ' (' + (inv.date || '') + '): ' + inv.items.length + ' lines' + (inv.fees.length ? ' + ' + inv.fees.map((x) => x.desc + ' ' + m(x.amount)).join(', ') : '') + ', $' + inv.total.toFixed(2) +
+    (diff > 1 ? ' – the invoice says $' + inv.printedTotal.toFixed(2) + ', check the lines (maybe freight or a line the bot could not read).' : ''), diff > 1 ? 'err' : 'ok');
+  return inv;
+}
+function renderInvoices() {
+  const box = $('invList');
+  if (!box) return;
+  const list = state.invoices || [];
+  box.innerHTML = list.length ? '<b>Invoices the bot knows</b> (used for names, costs and margins everywhere):<br>' + list.map((x) =>
+    '<span class="inv-chip">' + esc((x.supplier || 'Supplier').replace(/ Pty Ltd/i, '') + ' #' + (x.number || x.file) + ' · ' + (x.date || '') + ' · ' + x.items.length + ' lines') +
+    ' <button class="fx inv-del" data-id="' + esc(x.id) + '" title="Forget this invoice">✕</button></span>').join(' ') : '<span class="muted">No invoices yet – load a supplier PDF here or in Items &amp; prices.</span>';
+}
+
 // ---------------- "Which column is which?" ----------------
 const ROLE_NAMES = {
   _: '–', barcode: 'Barcode', name: 'Name', hint: 'Supplier text (search help)', category: 'Category', price: 'Price',
@@ -406,6 +452,16 @@ function checkPill(r) {
 
 const catOptsHTML = (sel) => ['<option value="">— choose —</option>'].concat(categories.map((c) => '<option' + (c === sel ? ' selected' : '') + '>' + esc(c) + '</option>')).join('');
 
+// cost from the supplier invoice and the margin at this price
+function costHTML(r, price) {
+  const inv = r.inv || invoiceFor(r.barcode);
+  if (!inv || !inv.unitCost) return '';
+  const mg = price ? Math.round((price - inv.unitCost) / price * 100) : null;
+  const low = mg !== null && mg < (S.minMargin || 25);
+  return '<span class="sub' + (low ? ' bad-txt' : '') + '" title="From invoice ' + esc(inv.number || '') + ' ' + esc(inv.date || '') + ': ' + esc(inv.desc) + '">cost ' + m(inv.unitCost) +
+    (mg !== null ? ' · ' + mg + '% margin' : '') + (inv.rrp ? ' · RRP ' + m(inv.rrp) : '') + '</span>';
+}
+
 function rowHTML(r, i) {
   const pos = !!r.pos;
   const len = (r.name || '').length, tlen = (r.tname || '').length;
@@ -423,8 +479,8 @@ function rowHTML(r, i) {
     '<td>' + (r.status === 'waiting' ? '<span class="muted">…</span>' : storeCell(r.ww)) + '</td><td>' + (r.status === 'waiting' ? '' : storeCell(r.coles)) + '</td>' +
     '<td class="num">' + m(r.highest) + '</td>' +
     (pos
-      ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">new price</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–"></td>'
-      : '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '"></td>') +
+      ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">new price</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–">' + costHTML(r, r.newPrice || r.pos.price) + '</td>'
+      : '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '">' + costHTML(r, r.price) + '</td>') +
     '<td>' + nameCell + '</td>' +
     '<td>' + (pos ? checkPill(r) : '<select class="cat">' + catOptsHTML(r.category) + '</select>') + '</td>' +
     '<td>' + addStatusPill(r) + '</td></tr>';
@@ -490,23 +546,57 @@ function renderAdd() {
   refreshButtons();
 }
 
-// Update one row and its file header without redrawing everything (so typing elsewhere isn't interrupted)
-function refreshRow(r) {
+// ---- background updates must never get in the way of what you are typing or looking at ----
+let userActiveUntil = 0, pendingRows = new Set(), pendingFull = false, flushTimer = null;
+['input', 'keydown', 'focusin', 'mousedown', 'wheel'].forEach((ev) => $('addTable').addEventListener(ev, () => { userActiveUntil = Date.now() + 2500; }, { passive: true }));
+const userActive = () => Date.now() < userActiveUntil || ($('addTable').contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName));
+function scheduleFlush() { if (!flushTimer) flushTimer = setTimeout(flushPending, 1200); }
+function flushPending() {
+  flushTimer = null;
+  if (userActive()) { scheduleFlush(); return; }
+  if (pendingFull) { pendingFull = false; pendingRows.clear(); keepScroll(() => renderAdd()); return; }
+  const rows = Array.from(pendingRows); pendingRows.clear();
+  rows.forEach((r) => replaceRow(r));
+}
+// Replace while keeping what you see in the same place on screen
+function keepScroll(fn) {
+  const wrap = $('addTable').closest('.tablewrap');
+  const rows = Array.from($('addTable').querySelectorAll('tr[data-i], tr.fhead'));
+  const top = wrap.getBoundingClientRect().top;
+  const anchor = rows.find((tr) => tr.getBoundingClientRect().bottom > top);
+  const key = anchor ? (anchor.dataset.i ? 'tr[data-i="' + anchor.dataset.i + '"]' : 'tr.fhead[data-f="' + CSS.escape(anchor.dataset.f) + '"]') : null;
+  const before = anchor ? anchor.getBoundingClientRect().top : 0;
+  fn();
+  const again = key && $('addTable').querySelector(key);
+  if (again) wrap.scrollTop += again.getBoundingClientRect().top - before;
+}
+function replaceRow(r) {
   const i = state.add.indexOf(r);
   const fid = r.fileId || 'old';
   const body = document.querySelector('#addTable tbody.fgroup[data-f="' + CSS.escape(fid) + '"]');
-  if (!body) { renderAdd(); return; }
-  const f = state.files.find((x) => x.id === fid);
-  const head = body.querySelector('tr.fhead');
-  if (head && f) head.outerHTML = groupHeadHTML(f);
+  if (!body) { pendingFull = true; scheduleFlush(); return; }
   const tr = body.querySelector('tr[data-i="' + i + '"]');
-  if (tr && !tr.contains(document.activeElement) && inFilter(r)) tr.outerHTML = rowHTML(r, i);
-  else if (!tr && f && f.open && inFilter(r)) renderAdd();
+  const f = state.files.find((x) => x.id === fid);
+  keepScroll(() => {
+    if (tr && inFilter(r)) tr.outerHTML = rowHTML(r, i);
+    else if (!tr && f && f.open && inFilter(r)) { pendingFull = true; scheduleFlush(); }
+  });
+}
+function refreshRow(r) {
+  const fid = r.fileId || 'old';
+  const f = state.files.find((x) => x.id === fid);
+  const body = document.querySelector('#addTable tbody.fgroup[data-f="' + CSS.escape(fid) + '"]');
+  // the file's header line is always safe to update (progress, counts)
+  const head = body && body.querySelector('tr.fhead');
+  if (head && f) head.outerHTML = groupHeadHTML(f);
+  if (!body) { pendingFull = true; scheduleFlush(); }
+  else if (f && f.open) { if (userActive()) { pendingRows.add(r); scheduleFlush(); } else replaceRow(r); }
   const done = state.add.filter((x) => x.status !== 'waiting').length;
   $('addSummary').textContent = state.files.length + ' file(s) · ' + done + '/' + state.add.length + ' looked up' + (lookupRunning ? ' – looking up in the background…' : '');
   ['fAll', 'fNew', 'fPos', 'fAttn'].forEach((id, k) => { $(id).textContent = [state.add.length, state.add.filter((x) => !x.pos).length, state.add.filter((x) => x.pos).length, state.add.filter(needsAttention).length][k]; });
   refreshButtons();
 }
+function safeRenderAdd() { if (userActive()) { pendingFull = true; scheduleFlush(); } else keepScroll(() => renderAdd()); }
 
 $('addFilter').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-f]');
@@ -615,8 +705,28 @@ $('addFile').addEventListener('change', async (e) => {
   const anyOpen = state.files.some((f) => f.open);
   let first = true;
   for (const f of files) {
-    const raw = await readSheet(f);
     const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    if (/\.pdf$/i.test(f.name)) {
+      let inv;
+      try { inv = await readInvoicePdf(f); } catch (err) { log(f.name + ': ' + err.message, 'err'); continue; }
+      const rows = [];
+      inv.items.forEach((it) => {
+        const key = it.barcode || it.desc.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        const r = { barcode: it.barcode, inName: '', hint: it.desc, name: '', tname: '', category: '', price: null, status: 'waiting', use: it.shipped > 0, fileId: id,
+          note: it.status ? it.status + ' – not delivered' : '' };
+        setNames(r, INV.tidyName(it.desc), '');
+        r.nameFromInvoice = true;
+        rows.push(r);
+      });
+      state.files.push({ id, name: (inv.supplier || 'Invoice').replace(/ Pty Ltd/i, '') + ' #' + (inv.number || f.name) + (inv.date ? ' · ' + inv.date : ''), open: !anyOpen && first, invoice: inv.id });
+      state.add.push(...rows);
+      log('Loaded ' + rows.length + ' items from invoice ' + (inv.number || f.name));
+      first = false;
+      continue;
+    }
+    const raw = await readSheet(f);
     const res = itemsFromSheet(raw, null, id, seen);
     if (!res.items.length) { log(f.name + ': no barcodes or names found – use "Columns…" after loading to pick them.', 'err'); }
     state.files.push({ id, name: f.name, open: !anyOpen && first, raw: raw.slice(0, 5000), picks: res.picks });
@@ -795,9 +905,8 @@ async function startLookup(again) {
     if (n) {
       const nPos = state.add.filter((r) => r.pos).length, nNew = state.add.length - nPos;
       log('Done: ' + nNew + ' new items, ' + nPos + ' already in PosPort (' + state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length + ' prices flagged).', 'ok');
-      if (S.autoExportFailed && state.add.some((r) => ADD_FAILED.includes(r.status))) $('addFailed').click();
     }
-  } finally { lookupRunning = false; lookupStop = false; renderAdd(); }
+  } finally { lookupRunning = false; lookupStop = false; safeRenderAdd(); }
 }
 let lookupStop = false;
 $('addLookup').addEventListener('click', () => startLookup(true));
@@ -815,14 +924,22 @@ async function lookupOne(r) {
     }
   }
   r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
+  r.inv = invoiceFor(r.barcode);
   const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
   const nameSrc = src || r.net;
-  if (nameSrc && !r.inName) setNames(r, nameSrc.name, nameSrc.size);
+  if (nameSrc && !r.inName && !r.nameEdited) setNames(r, nameSrc.name, nameSrc.size);
+  else if (!nameSrc && r.inv && !r.inName && !r.nameEdited) { setNames(r, INV.tidyName(r.inv.desc), ''); r.nameFromInvoice = true; }
   else if (!r.name && r.hint) setNames(r, r.hint, '');
   if (!r.category) r.category = R.guessCategory(nameSrc ? nameSrc.name : (r.inName || r.hint), (res.ww && res.ww.dept) || (r.net && r.net.dept), categories);
   if (!r.priceEdited) r.price = r.overridePrice || R.newItemPrice(res.highest, S);
+  // not at Woolworths/Coles: price from the supplier invoice (their RRP, or cost + margin)
+  if (!res.highest && r.inv && !r.priceEdited && !r.overridePrice) {
+    r.price = r.inv.rrp || (r.inv.unitCost ? R.round2(r.inv.unitCost * (1 + (S.fallbackMargin || 40) / 100)) : null);
+    r.invPriced = !!r.price;
+  }
   const unsure = [res.ww, res.coles].some((x) => x && x.found && x.match && x.match !== 'barcode');
   if (r.barcode && !R.validBarcode(r.barcode)) { r.status = 'not found'; r.note = 'This barcode looks mistyped (check digit is wrong) - please re-scan it.'; }
+  else if (!res.highest && r.invPriced) { r.status = 'check'; r.note = 'Not at Woolworths/Coles – name and price from invoice ' + (r.inv.number || '') + (r.inv.rrp ? ' (supplier RRP)' : ' (cost + ' + (S.fallbackMargin || 40) + '%)'); }
   else if (!res.highest) { r.status = 'not found'; r.note = 'No price at Woolworths or Coles' + (r.net ? ' (name from ' + r.net.source + ')' : r.name ? ' (name from your sheet)' : ''); }
   else { r.status = unsure ? 'check' : 'ready'; r.note = unsure ? 'Matched by name – please check it is the same product' : ''; }
   const found = r.notInPos ? { item: null } : findInPos(r);
@@ -1419,6 +1536,8 @@ async function identifyBarcode(bc) {
   if (co && co.found && co.match === 'barcode') return { name: co.name, source: 'Coles' };
   const net = await window.CSB_STORES.internetLookup(bc);
   if (net && net.found) return { name: [net.name, net.size].filter(Boolean).join(' '), source: net.source };
+  const iv = invoiceFor(bc);
+  if (iv) return { name: INV.tidyName(iv.desc), source: 'invoice ' + (iv.number || '') };
   if (ww && ww.found) return { name: ww.name, source: 'Woolworths (check)' };
   if (co && co.found) return { name: co.name, source: 'Coles (check)' };
   return null;
@@ -1823,7 +1942,11 @@ async function ticketFromBarcode(bc) {
   const fromAdd = state.add.find((r) => r.barcode && R.sameBarcode(r.barcode, bc) && (r.pos || r.status === 'created'));
   if (fromAdd) return { full: fromAdd.pos ? fromAdd.pos.name : fromAdd.name, price: fromAdd.pos ? fromAdd.pos.price : fromAdd.price, barcode: bc };
   const id = await identifyBarcode(bc);
-  if (!id) return { error: 'not found anywhere' };
+  if (!id) {
+    const iv = invoiceFor(bc);
+    if (iv) return { full: INV.tidyName(iv.desc), price: iv.rrp || null, barcode: bc, note: 'name from invoice ' + (iv.number || '') + (iv.rrp ? ', price = supplier RRP' : ' – type the price') };
+    return { error: 'not found anywhere' };
+  }
   if (state.catalogue.length) {
     const mm = R.posMatch(id.name, state.catalogue, (c) => c.name);
     if (mm.item && mm.sure) return { full: mm.item.name, price: mm.item.price, barcode: bc };
@@ -1925,7 +2048,8 @@ function buyVerdict(r) {
   r.special = !!((r.ww && r.ww.found && r.ww.onSpecial && r.ww.now < r.ww.regular) || (r.coles && r.coles.found && r.coles.onSpecial && r.coles.now < r.coles.regular));
   const unit = r.cost || (r.costOuter && r.units ? r.costOuter / r.units : null);
   r.unitCost = unit ? R.round2(unit) : null;
-  if (!best) { r.verdict = 'no data'; r.vclass = 'warn'; r.vtext = 'No Woolworths/Coles price'; return; }
+  if (r.notDelivered) { r.verdict = 'short'; r.vclass = 'warn'; r.vtext = 'Not delivered: ' + r.notDelivered + ' – check you were not charged'; return; }
+  if (!best) { r.verdict = 'no data'; r.vclass = 'warn'; r.vtext = 'No Woolworths/Coles price' + (r.rrp ? ' (supplier RRP ' + m(r.rrp) + ')' : ''); return; }
   if (!unit) { r.verdict = 'list'; r.vclass = r.special ? 'ok' : ''; r.vtext = 'Cheapest: ' + best.store + ' ' + m(best.p) + (r.special ? ' (special)' : ''); return; }
   const diff = unit - best.p;
   if (diff > best.p * tol) { r.verdict = 'worse'; r.vclass = 'bad'; r.vtext = 'Cheaper at ' + best.store + ' by ' + m(diff) + ' each – return / buy there'; }
@@ -1935,11 +2059,12 @@ function buyVerdict(r) {
 
 function renderBuy() {
   const f = state.buyFilter || 'all';
-  const show = (r) => f === 'all' || (f === 'worse' && r.verdict === 'worse') || (f === 'special' && r.special) || (f === 'good' && r.verdict === 'good');
+  const show = (r) => f === 'all' || (f === 'worse' && r.verdict === 'worse') || (f === 'special' && r.special) || (f === 'good' && r.verdict === 'good') || (f === 'short' && r.verdict === 'short');
   $('bAll').textContent = state.buy.length;
   $('bWorse').textContent = state.buy.filter((r) => r.verdict === 'worse').length;
   $('bSpecial').textContent = state.buy.filter((r) => r.special).length;
   $('bGood').textContent = state.buy.filter((r) => r.verdict === 'good').length;
+  $('bShort').textContent = state.buy.filter((r) => r.verdict === 'short').length;
   document.querySelectorAll('#buyFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === f));
   $('buyTable').innerHTML = !state.buy.length ? '<tbody><tr><td class="muted">Load a shopping list or an invoice.</td></tr></tbody>' :
     '<thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Paid / unit</th><th>Woolworths</th><th>Coles</th><th class="num">Cheapest now</th><th>Verdict</th><th class="num">PosPort sell</th><th class="num">Margin</th></tr></thead><tbody>' +
@@ -1978,11 +2103,28 @@ $('buyTable').addEventListener('change', (e) => {
   buyVerdict(r); renderBuy(); saveState();
 });
 $('buyClear').addEventListener('click', () => { state.buy = []; renderBuy(); saveState(); });
+document.addEventListener('click', (e) => {
+  if (!e.target.classList.contains('inv-del')) return;
+  state.invoices = (state.invoices || []).filter((x) => x.id !== e.target.dataset.id);
+  invIndex = null; saveState(); renderInvoices();
+});
 
 $('buyFile').addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
   for (const f of files) {
+    if (/\.pdf$/i.test(f.name)) {
+      let inv;
+      try { inv = await readInvoicePdf(f); } catch (err) { log(err.message, 'err'); continue; }
+      const label = 'invoice ' + (inv.number || f.name);
+      inv.items.forEach((it) => state.buy.push({
+        barcode: it.barcode, name: INV.tidyName(it.desc), supplierDesc: it.desc, qty: it.unitsReceived || '', cost: it.unitCost, file: label,
+        notDelivered: it.shipped === 0 ? (it.status || 'not delivered') + (it.unitsShort ? ' – ' + it.unitsShort + ' units short' : '') : '',
+        rrp: it.rrp, promo: it.promo,
+      }));
+      log('Loaded ' + inv.items.length + ' lines from ' + label);
+      continue;
+    }
     const mapped = await mapColumns(f.name, await readSheet(f), ['barcode', 'name', 'qty', 'cost', 'costOuter', 'units'],
       'Invoice: pick the barcode (or name), quantity and what you paid. Shopping list: barcode or name is enough.');
     if (!mapped) continue;
@@ -2150,7 +2292,7 @@ $('bkItems').addEventListener('click', () => runBackup(true));
 // =====================================================================
 // SETTINGS
 // =====================================================================
-const NUM_KEYS = ['markup', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel'];
+const NUM_KEYS = ['markup', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel', 'fallbackMargin', 'minMargin'];
 function fillSettings() {
   NUM_KEYS.forEach((k) => { $('s_' + k).value = S[k]; });
   $('s_extraBlankRow').checked = !!S.extraBlankRow;
@@ -2228,6 +2370,6 @@ function refreshButtons() {
   if (state.catalogue.length) $('chkScanInfo').textContent = state.catalogue.length + ' items from last scan';
   if (state.checkInput.length) $('chkFileInfo').textContent = state.checkInput.length + ' items loaded';
   renderAdd(); renderCheck(); refreshButtons();
-  loadTkOpts(); renderTickets(); renderBuy();
+  loadTkOpts(); renderTickets(); renderBuy(); renderInvoices();
   log('Ready. Keep PosPort Back Office logged in, in this Chrome window.');
 })();

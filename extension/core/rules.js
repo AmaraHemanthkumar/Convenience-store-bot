@@ -15,6 +15,8 @@
     shortInPosPort: false, // true = also save the short ticket name in PosPort
     delayMs: 700,          // pause between website actions
     parallel: 3,           // how many items are looked up at the same time (1-6)
+    fallbackMargin: 40,    // % on top of invoice cost when Woolworths/Coles don't have the item (and no RRP)
+    minMargin: 25,         // margin % below which the cost shows red
     batchSize: 20,         // items per Bulk Create page
     extraBlankRow: true,   // keep one extra empty row (works around the Bulk Create bug)
     autoCreate: false,     // press "Create N Items" automatically after filling

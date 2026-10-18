@@ -53,9 +53,21 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
 
 **Download Excel** saves the full comparison, and **Download failed items** saves everything that needs a hand-check.
 
+**Working while files load:** background look-ups never redraw the table while you are typing, clicking or scrolling. Finished rows wait and drop in about 2 seconds after you stop, and the page stays where you were. Only the small counts on each file row update straight away.
+
+### Supplier invoice PDFs (used everywhere)
+Drop the supplier's invoice PDF (e.g. The Distributors Brisbane) into **Items & prices** or **Buying & invoices**. No columns to pick: the bot reads every line (description, barcode, item code, qty, RRP, units per carton, levy, GST) and works out **what one unit really cost you**, inc GST and container deposit. Part cartons such as 0.333 count as whole units.
+
+Every invoice you load is remembered (listed under *Buying & invoices*, ✕ to forget one) and used as a back-up source of information:
+- **Items & prices:** the invoice becomes one file row ("Supplier #number · date"). Lines that weren't delivered are left unticked.
+- **Cost and margin** show under every price whose barcode is on an invoice, and turn red below the *lowest margin* in Settings.
+- **Not at Woolworths/Coles or online?** The name comes from the invoice (supplier short-hand like "NES", "SMT" or "S/CREAM" is spelt out). The price is the invoice **RRP**, or cost + the *fallback margin* in Settings, and it is marked *to check*.
+- **Tickets and labels:** an unknown barcode still gets a name from the invoice.
+- **Buying & invoices:** compares the real unit cost with today's supermarket prices. The **Not delivered** filter lists out-of-stock / short lines, so you can check you weren't charged.
+
 ### 3 · Buying & invoices
 Is what you paid a good price, or would it be cheaper at Woolworths or Coles today (specials included)?
-- **Load:** an invoice or a shopping list (several files at once), or scan barcodes.
+- **Load:** an invoice (Excel or the supplier's PDF) or a shopping list (several files at once), or scan barcodes.
 - **Pick columns:**
   - an invoice needs barcode (or name), quantity, and paid per unit, or paid per carton plus units per carton;
   - a shopping list only needs a barcode or name.
@@ -65,7 +77,7 @@ Is what you paid a good price, or would it be cheaper at Woolworths or Coles tod
   - a verdict: **Cheaper at Woolworths by $x – return / buy there**, **About the same** (tolerance adjustable), or **x% below**;
   - your PosPort sell price and margin.
 - **Totals:** what you paid vs the same items at today's cheapest supermarket price, and how much more you paid on the "cheaper elsewhere" items.
-- **Filters:** Cheaper elsewhere · On special now (good time to stock up) · Good deal.
+- **Filters:** Cheaper elsewhere · On special now (good time to stock up) · Good deal · Not delivered.
 - **Downloads:** **Download Excel** saves the full comparison. **Download "return / buy elsewhere" list** saves only the problem lines.
 
 ### Scanning barcodes straight in
@@ -198,6 +210,7 @@ If a step fails, send a screenshot of the PosPort screen together with the messa
 ## For developers
 ```
 node tests/rules.test.js                 # pricing / names / categories
+node tests/invoice.test.js               # supplier invoice PDF lines -> unit cost
 python tests/test_posport_mock.py        # PosPort actions on the mock page
 python tests/test_extension_e2e.py       # whole extension with fake Woolworths/Coles/PosPort
 python tests/test_python_bot.py          # Python version with the same fakes

@@ -238,6 +238,28 @@ def main():
         ws2 = load_workbook(save_xlsx(dl.value)).active
         assert ws2.max_row == 2 and ws2.cell(2, 1).value.startswith("ALLENS"), [c.value for c in ws2[2]][:3]
 
+        # Supplier invoice PDF (made-up, same layout as The Distributors): per-unit cost, not-delivered lines
+        import subprocess, sys
+        pdf = pathlib.Path(tempfile.mkdtemp()) / "invoice.pdf"
+        subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "make_invoice_pdf.py"), str(pdf)], check=True)
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.set_input_files("#buyFile", str(pdf))
+        wait_until(page, lambda: "Comparison finished" in page.inner_text("#log"))
+        txt = page.inner_text("#buyTable")
+        print("invoice pdf:", page.inner_text("#invList").replace("\n", " "), "| not delivered:", page.inner_text("#bShort"))
+        assert "9900001" in page.inner_text("#invList")
+        assert page.inner_text("#bShort") == "1" and "Not delivered" in txt, txt
+        # same PDF in Items & prices -> one file row named after the invoice, cost and margin under the price
+        page.click("[data-tab=add]")
+        page.set_input_files("#addFile", str(pdf))
+        wait_until(page, lambda: "Example Wholesale" in page.inner_text("#addTable"))
+        wait_until(page, lambda: "Done:" in page.inner_text("#log").split("Example Wholesale")[-1])
+        page.wait_for_timeout(3000)
+        txt = page.inner_text("#addTable")
+        print("invoice rows:", txt[txt.find("Example Wholesale"):][:600].replace("\n", " | "))
+        assert "margin" in txt and "cost $" in txt, txt[-800:]
+        page.click("[data-tab=buy]")
+
         # Backup (items only on the mock): Excel with a Contents sheet + a JSON file
         page.click("[data-tab=backup]")
         downloads = []

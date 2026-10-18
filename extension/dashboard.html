@@ -31,8 +31,8 @@
       <div class="steps">
         <div class="step">
           <h3>1. Load barcodes</h3>
-          <p>Choose one or more Excel/CSV files. Each file becomes one row below – click it to open the whole sheet. Open one and work on it while the others are looked up in the background.</p>
-          <label class="btn file primary">Choose Excel files<input type="file" id="addFile" accept=".xlsx,.xls,.csv" multiple></label>
+          <p>Choose one or more Excel/CSV files or supplier <b>invoice PDFs</b>. Each file becomes one row below – click it to open the whole sheet. Open one and work on it while the others are looked up in the background.</p>
+          <label class="btn file primary">Choose Excel files<input type="file" id="addFile" accept=".xlsx,.xls,.csv,.pdf" multiple></label>
           <span id="addFileInfo" class="muted"></span>
           <div class="row">
             <input type="text" id="addScan" class="scanbox" placeholder="Scan / type a barcode + Enter" autocomplete="off">
@@ -84,8 +84,8 @@
       <div class="steps">
         <div class="step">
           <h3>1. Shopping list or invoice</h3>
-          <p>Excel/CSV files (several at once). Pick the columns: barcode or name, quantity, and – for an invoice – what you paid (per unit, or per carton + units per carton).</p>
-          <label class="btn file primary">Choose files<input type="file" id="buyFile" accept=".xlsx,.xls,.csv" multiple></label>
+          <p><b>Supplier invoice PDFs</b> are read automatically (cost per unit inc GST, units delivered, short/out of stock). Excel/CSV too – then pick the columns.</p>
+          <label class="btn file primary">Choose files<input type="file" id="buyFile" accept=".xlsx,.xls,.csv,.pdf" multiple></label>
           <input type="text" id="buyScan" class="scanbox" placeholder="Scan / type a barcode + Enter" autocomplete="off">
           <span id="buyInfo" class="muted small-note"></span>
         </div>
@@ -113,8 +113,10 @@
           <button data-f="worse">Cheaper elsewhere <span id="bWorse"></span></button>
           <button data-f="special">On special now <span id="bSpecial"></span></button>
           <button data-f="good">Good deal <span id="bGood"></span></button>
+          <button data-f="short">Not delivered <span id="bShort"></span></button>
         </div>
       </div>
+      <div id="invList" class="inv-list"></div>
       <div class="tablewrap"><table id="buyTable" class="grid"></table></div>
     </section>
 
@@ -260,6 +262,8 @@
           <textarea id="s_abbrevs" rows="4" placeholder="Classic=CLS&#10;Special=SPL&#10;Chocolate=CHOC"></textarea></label>
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
         <label>Items looked up at the same time (1–6)<input type="number" id="s_parallel" min="1" max="6"></label>
+        <label>Not at Woolworths/Coles: price = invoice cost + (%)<input type="number" id="s_fallbackMargin"></label>
+        <label>Show cost in red below margin (%)<input type="number" id="s_minMargin"></label>
         <label>Items per Bulk Create page<input type="number" id="s_batchSize"></label>
         <label class="check"><input type="checkbox" id="s_extraBlankRow"> Keep one extra empty row (Bulk Create bug)</label>
         <label class="check"><input type="checkbox" id="s_autoTickets"> Put created items and changed prices on the print list automatically</label>
@@ -293,6 +297,8 @@
   <footer><ul id="log" class="log"></ul></footer>
 
   <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/pdf.min.js"></script>
+  <script src="core/invoice.js"></script>
   <script src="core/rules.js"></script>
   <script src="core/barcode.js"></script>
   <script src="core/stores.js"></script>

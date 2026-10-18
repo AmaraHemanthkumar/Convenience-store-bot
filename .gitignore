@@ -5,3 +5,5 @@ python/.installed
 __pycache__/
 *.pyc
 node_modules/
+# real supplier invoices contain bank/account details - never commit them
+*.pdf
