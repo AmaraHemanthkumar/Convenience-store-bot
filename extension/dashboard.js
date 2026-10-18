@@ -331,6 +331,7 @@ $('addLookup').addEventListener('click', async () => {
       renderAdd(); saveState();
     }
     log('Price lookup finished.', 'ok');
+    if (S.autoExportFailed && state.add.some((r) => ADD_FAILED.includes(r.status))) $('addFailed').click();
   } finally { setBusy(false); }
 });
 
@@ -469,7 +470,11 @@ function catalogueIndex() {
 
 $('chkScan').addEventListener('click', async () => {
   setBusy(true);
-  try {
+  try { await scanCatalogue(); } finally { setBusy(false); }
+});
+
+async function scanCatalogue() {
+  {
     if (!(await posGo('/catalog/items', 'items'))) { log('Items page did not open.', 'err'); return; }
     const seen = new Map();
     for (let page = 1; page <= 200; page++) {
@@ -499,8 +504,8 @@ $('chkScan').addEventListener('click', async () => {
     $('chkScanInfo').textContent = state.catalogue.length + ' items · ' + withBc + ' with barcode';
     log('Scanned ' + state.catalogue.length + ' PosPort items (' + withBc + ' with barcodes).', 'ok');
     saveState();
-  } finally { setBusy(false); }
-});
+  }
+}
 
 $('chkFile').addEventListener('change', async (e) => {
   const f = e.target.files[0];
@@ -618,6 +623,7 @@ $('chkLookup').addEventListener('click', async () => {
       renderCheck(); saveState();
     }
     log('Price check finished.', 'ok');
+    if (S.autoExportFailed && state.check.some((r) => r.status === 'NO DATA' || !r.posName)) setTimeout(() => $('chkFailed').click(), 0);
   } finally { setBusy(false); renderCheck(); }
 });
 
@@ -718,7 +724,8 @@ $('lblFile').addEventListener('change', async (e) => {
   $('lblNames').value = names.join('\n');
   e.target.value = '';
 });
-$('lblFailed').addEventListener('click', () => {
+$('lblFailed').addEventListener('click', () => exportLabelFailures());
+function exportLabelFailures() {
   const rows = (state.labels || []).filter((r) => r.status === 'failed').map((r) => ({
     'What you entered': r.line,
     'Barcode check digit': r.barcodeOk === '' || r.barcodeOk === undefined ? '' : (r.barcodeOk ? 'ok' : 'WRONG – re-scan'),
@@ -729,12 +736,76 @@ $('lblFailed').addEventListener('click', () => {
     'Closest match %': r.closestScore ? Math.round(r.closestScore * 100) : '',
     'Next closest PosPort item': r.runnerUp || '',
     'Words searched in PosPort': r.words || '',
+    'Other possible PosPort items': (r.candidates || []).map((c) => c.name + ' (' + Math.round(c.score * 100) + '%)').join(' | '),
+    'Probably missing from Back Office': r.missing ? 'yes' : 'no',
     'In last PosPort scan?': state.catalogue.length ? (r.closest && state.catalogue.some((c) => c.name === r.closest) ? 'closest item is' : 'no close item') : 'no scan yet',
     Time: r.time,
   }));
   downloadFailed(rows, 'labels-failed', 'Failed');
+}
+
+// ---- "Not ticked" panel: pick the right PosPort item, or add the product to the Back Office ----
+function renderIssues() {
+  const box = $('lblIssues');
+  const fails = (state.labels || []).map((r, i) => ({ r, i })).filter(({ r }) => r.status === 'failed');
+  if (!fails.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="toolbar"><h3>Not ticked (' + fails.length + ')</h3><span class="spacer"></span>' +
+    '<button class="btn small" id="issAddAll">Add all missing to Back Office</button>' +
+    '<button class="btn small primary" id="issRerun">Run labels again with my picks</button></div>' +
+    '<table class="grid"><thead><tr><th>Entered</th><th>Product</th><th>Is it one of these PosPort items?</th><th>Not in PosPort?</th></tr></thead><tbody>' +
+    fails.map(({ r, i }) => '<tr data-i="' + i + '"><td>' + esc(r.line) + '</td><td>' + esc(r.product || '—') +
+      '<span class="sub">' + esc(r.reason || '') + '</span></td><td>' +
+      ((r.candidates || []).length ? r.candidates.map((c, k) => '<label class="check pick"><input type="radio" name="pick' + i + '" value="' + k + '"' + (r.chosen === c.name ? ' checked' : '') + '> ' +
+        esc(c.name) + ' <span class="muted">' + (c.price ? '$' + Number(c.price).toFixed(2) + ' · ' : '') + Math.round(c.score * 100) + '%</span></label>').join('') : '<span class="muted">nothing similar</span>') +
+      '</td><td>' + (r.queued ? '<span class="pill ok">in Add items</span>' : '<button class="btn small add1">Add to Back Office</button>') + '</td></tr>').join('') +
+    '</tbody></table>';
+}
+
+$('lblIssues').addEventListener('change', (e) => {
+  const tr = e.target.closest('tr[data-i]');
+  if (!tr || e.target.type !== 'radio') return;
+  const r = state.labels[+tr.dataset.i];
+  r.chosen = r.candidates[+e.target.value].name;
 });
-$('lblClear').addEventListener('click', () => { $('lblNames').value = ''; $('lblLog').innerHTML = ''; state.labels = []; refreshButtons(); });
+
+function queueForAdd(r) {
+  if (r.queued) return;
+  if (r.barcode && state.add.some((a) => a.barcode && R.sameBarcode(a.barcode, r.barcode))) { r.queued = true; return; }
+  state.add.push({ barcode: r.barcode || '', inName: '', hint: r.product && r.product !== r.line ? r.product : (r.barcode ? '' : r.line),
+    name: '', category: '', price: null, status: 'waiting', use: true });
+  r.queued = true;
+}
+
+$('lblIssues').addEventListener('click', (e) => {
+  if (e.target.id === 'issAddAll') {
+    const miss = state.labels.filter((r) => r.status === 'failed' && (r.missing || !r.chosen));
+    miss.forEach(queueForAdd);
+    saveState(); renderAdd(); renderIssues();
+    log(miss.length + ' items sent to "Add new items". Press "Look up prices" there.', 'ok');
+    showTab('add');
+    return;
+  }
+  if (e.target.id === 'issRerun') {
+    const lines = $('lblNames').value.split('\n').map((x) => x.trim()).filter(Boolean);
+    const ticked = new Set(state.labels.filter((r) => r.status === 'ticked').map((r) => r.line));
+    const out = lines.filter((l) => !ticked.has(l)).map((l) => {
+      const r = state.labels.find((x) => x.line === l);
+      return r && r.chosen ? r.chosen : l;
+    }).filter((l) => { const r = state.labels.find((x) => x.line === l); return !(r && r.queued); });
+    const keep = state.labels.filter((r) => r.status === 'ticked').map((r) => r.posName || r.line);
+    $('lblNames').value = keep.concat(out).join('\n');
+    $('lblRun').click();
+    return;
+  }
+  if (e.target.classList.contains('add1')) {
+    const r = state.labels[+e.target.closest('tr').dataset.i];
+    queueForAdd(r);
+    saveState(); renderAdd(); renderIssues();
+    log('"' + (r.product || r.line) + '" sent to "Add new items".', 'ok');
+  }
+});
+$('lblClear').addEventListener('click', () => { $('lblNames').value = ''; $('lblLog').innerHTML = ''; state.labels = []; renderIssues(); refreshButtons(); });
 
 // What is this barcode? Woolworths, then Coles, then the open barcode databases.
 async function identifyBarcode(bc) {
@@ -766,9 +837,12 @@ async function tickProduct(product) {
     }
   }
   let best = null;
+  const seen = new Map();
+  if (state.catalogue.length) state.catalogue.forEach((c) => seen.set(c.name, c.price));
   for (const word of R.searchWords(product)) {
     s = await pos('searchList', word, S.delayMs);
     const rows = (s && s.rows) || [];
+    rows.forEach((r) => seen.set(r.name, r.price));
     const m = R.posMatch(product, rows, (r) => r.name);
     if (m.item && (!best || m.score > best.score)) best = Object.assign({ word }, m);
     if (m.item && m.sure) {
@@ -776,11 +850,13 @@ async function tickProduct(product) {
       if (t && t.ok) return { ok: true, name: t.name, score: m.score };
     }
   }
+  const candidates = Array.from(seen.keys()).map((n) => ({ name: n, price: seen.get(n), score: R.posScore(product, n) }))
+    .filter((c) => c.score > 0.2).sort((a, b) => b.score - a.score).slice(0, 4);
   if (best && best.item) {
-    return { ok: false, error: 'not sure – closest is "' + best.item.name + '" (' + Math.round(best.score * 100) + '%)' + (best.runnerUp ? ' or "' + best.runnerUp.name + '"' : '') + '. Paste the exact name to use it.',
+    return { candidates, ok: false, error: 'not sure – closest is "' + best.item.name + '" (' + Math.round(best.score * 100) + '%)' + (best.runnerUp ? ' or "' + best.runnerUp.name + '"' : '') + '. Paste the exact name to use it.',
       closest: best.item.name, closestScore: best.score, runnerUp: best.runnerUp ? best.runnerUp.name : '', words: R.searchWords(product).join(', ') };
   }
-  return { ok: false, error: 'no item like "' + product + '" in PosPort', words: R.searchWords(product).join(', ') };
+  return { candidates, ok: false, missing: true, error: 'no item like "' + product + '" in PosPort', words: R.searchWords(product).join(', ') };
 }
 
 $('lblRun').addEventListener('click', async () => {
@@ -816,6 +892,10 @@ $('lblRun').addEventListener('click', async () => {
       lblLog('Opened Print labels with all ' + names.length + ' items. Choose the label stock and press Print.', 'ok');
       return;
     }
+    if (!state.catalogue.length && wanted.filter((w) => isBarcode(w.name) || w.name.split(' ').length < 3).length >= 5 &&
+        confirm('Faster and more accurate: read all PosPort item names first (takes about a minute)?')) {
+      await scanCatalogue();
+    }
     if (!(await posGo('/catalog/items', 'items'))) { lblLog('Items page did not open.', 'err'); return; }
     let ticked = 0;
     for (const w of wanted) {
@@ -827,7 +907,7 @@ $('lblRun').addEventListener('click', async () => {
         id = await identifyBarcode(product);
         if (!id) {
           lblLog('✗ ' + w.line + ': not found at Woolworths, Coles or the barcode databases – type its name instead', 'err');
-          record({ line: w.line, status: 'failed', reason: 'Barcode not found at Woolworths, Coles or the barcode databases', barcodeOk: R.validBarcode(w.line) });
+          record({ line: w.line, status: 'failed', reason: 'Barcode not found at Woolworths, Coles or the barcode databases', barcodeOk: R.validBarcode(w.line), barcode: w.line.replace(/\s/g, ''), missing: true, candidates: [] });
           continue;
         }
         product = id.name;
@@ -839,13 +919,18 @@ $('lblRun').addEventListener('click', async () => {
         status: res.ok ? 'ticked' : 'failed', posName: res.ok ? res.name : '', score: res.score || '',
         reason: res.ok ? '' : res.error, closest: res.closest || '', closestScore: res.closestScore || '', runnerUp: res.runnerUp || '',
         words: res.words || '', barcodeOk: isBarcode(w.line) ? R.validBarcode(w.line) : '',
+        barcode: isBarcode(w.line) ? w.line.replace(/\s/g, '') : '', candidates: res.candidates || [], missing: !!res.missing,
       });
       if (res.ok) { ticked++; lblLog('✓ ' + w.line + (res.name.toLowerCase() !== w.line.toLowerCase() ? ' → ' + res.name + (res.score ? ' (' + Math.round(res.score * 100) + '% match)' : '') : ''), 'ok'); }
       else lblLog('✗ ' + w.line + ': ' + res.error, 'err');
       await sleep(S.delayMs / 2);
     }
     const nFail = state.labels.filter((r) => r.status === 'failed').length;
-    if (nFail) lblLog(nFail + ' failed – press "Download failed items" for an Excel with the details.', 'err');
+    renderIssues();
+    if (nFail) {
+      lblLog(nFail + ' not ticked – see "Not ticked" below to pick the right item or add it to the Back Office.', 'err');
+      if (S.autoExportFailed) exportLabelFailures();
+    }
     if (!ticked) { lblLog('Nothing was ticked.', 'err'); return; }
     const p = await pos('clickPrintLabels');
     const tabId = await posTab();
@@ -862,6 +947,7 @@ function fillSettings() {
   NUM_KEYS.forEach((k) => { $('s_' + k).value = S[k]; });
   $('s_extraBlankRow').checked = !!S.extraBlankRow;
   $('s_autoCreate').checked = !!S.autoCreate;
+  $('s_autoExportFailed').checked = S.autoExportFailed !== false;
   $('s_selectors').value = S.selectors && Object.keys(S.selectors).length ? JSON.stringify(S.selectors, null, 2) : '';
   $('lowLbl').textContent = m(S.flagLow);
   $('highLbl').textContent = m(S.flagHigh);
@@ -870,6 +956,7 @@ $('sSave').addEventListener('click', async () => {
   NUM_KEYS.forEach((k) => { const v = parseFloat($('s_' + k).value); if (isFinite(v)) S[k] = v; });
   S.extraBlankRow = $('s_extraBlankRow').checked;
   S.autoCreate = $('s_autoCreate').checked;
+  S.autoExportFailed = $('s_autoExportFailed').checked;
   const raw = $('s_selectors').value.trim();
   try { S.selectors = raw ? JSON.parse(raw) : {}; } catch (e) { $('sInfo').textContent = 'Patterns are not valid JSON.'; return; }
   await chrome.storage.local.set({ settings: S });

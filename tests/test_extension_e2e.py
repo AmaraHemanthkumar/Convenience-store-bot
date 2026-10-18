@@ -102,6 +102,12 @@ def main():
         head = [c.value for c in ws[1]]
         print("labels failed sheet:", head, [c.value for c in ws[2]][:5])
         assert ws.max_row == 2 and ws.cell(2, 1).value == "Mystery Snack 99g" and "Why it failed" in head
+        # "Not ticked" panel: send the missing product to Add new items
+        assert page.locator("#lblIssues tr[data-i]").count() == 1
+        before = page.locator("#addTable tbody tr").count()
+        page.click("#lblIssues .add1")
+        assert "in Add items" in page.inner_text("#lblIssues")
+        assert page.locator("#addTable tbody tr").count() == before + 1
         page.click("[data-tab=add]")
         with page.expect_download() as dl:
             page.click("#addFailed")
@@ -110,7 +116,16 @@ def main():
         print("add failed sheet:", ws.max_row - 1, "rows,", len(head), "columns")
         assert "Woolworths other results" in head and "Coles normal $" in head and ws.max_row >= 2
 
+        # Not sure which item -> pick one in the panel -> run again
         page.click("[data-tab=labels]")
+        page.fill("#lblNames", "Minties")
+        page.click("#lblRun")
+        wait_until(page, lambda: "Nothing was ticked" in page.inner_text("#lblLog") or "Print labels" in page.inner_text("#lblLog"))
+        print("pick run log:", page.inner_text("#lblLog").replace("\n", " | "), "| issues:", page.inner_text("#lblIssues")[:300])
+        page.locator("#lblIssues .pick", has_text="ALLENS MINTIES 150G").locator("input").check()
+        page.click("#issRerun")
+        wait_until(page, lambda: "Print labels (1 items)" in page.inner_text("#lblLog"))
+        assert "✓ ALLENS MINTIES 150G" in page.inner_text("#lblLog"), page.inner_text("#lblLog")
         # Price check: scan the mock list, then compare a name-only sheet
         page.click("[data-tab=check]")
         page.click("#chkScan")

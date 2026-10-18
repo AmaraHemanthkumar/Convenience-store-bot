@@ -78,3 +78,6 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
 .log li.err { color: var(--bad); }
 .log li.ok { color: var(--ok); }
 #lblLog { margin-top: 10px; max-height: 300px; overflow: auto; }
+.issues { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-top: 12px; }
+.issues h3 { margin: 0; font-size: 15px; }
+.pick { display: flex; margin: 2px 0; font-size: 13px; }

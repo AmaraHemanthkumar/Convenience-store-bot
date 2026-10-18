@@ -58,8 +58,15 @@ Paste item names (one per line, exactly as in PosPort) or load them from Excel, 
 
 If the bot has already seen the PosPort ID of every item, it skips the ticking and opens the Print labels page with all of them directly.
 
+### Items that weren't ticked
+After a labels run, every item the bot couldn't tick is listed under **Not ticked**:
+- **Is it one of these PosPort items?** Shows the closest PosPort items with their price and match %. Pick the right one, then press **Run labels again with my picks**.
+- **Add to Back Office** (or **Add all missing to Back Office**) sends the barcode and product name to **1 · Add new items**. There you press *Look up prices* and create it like any new item.
+
+With 5 or more barcodes and no scan yet, the bot offers to read all PosPort item names first, which is faster and more accurate.
+
 ### Failed items Excel
-Each tab has a **Download failed items** button. It saves an Excel of everything that didn't work, with all the details the bot has:
+Each tab has a **Download failed items** button, and the file also downloads automatically at the end of a run when something failed (you can turn this off in Settings). It saves an Excel of everything that didn't work, with all the details the bot has:
 - why it failed;
 - whether the barcode's check digit is OK;
 - everything Woolworths and Coles returned (product, size, normal/special price, department, link, other close results);

@@ -15,6 +15,7 @@
     batchSize: 20,         // items per Bulk Create page
     extraBlankRow: true,   // keep one extra empty row (works around the Bulk Create bug)
     autoCreate: false,     // press "Create N Items" automatically after filling
+    autoExportFailed: true, // download the failed-items Excel automatically after a run
   };
 
   // Categories as they appear in PosPort's Bulk Create dropdown (Oct 2026).
@@ -307,7 +308,9 @@
     const top = ranked[0], second = ranked[1];
     if (!top) return { item: null, score: 0, runnerUp: null, sure: false };
     const gap = top.s - (second ? second.s : 0);
-    return { item: top.c, score: top.s, runnerUp: second ? second.c : null, sure: top.s >= 0.6 && gap >= 0.12 };
+    // without a size in the product name, sizes can't separate e.g. a 150g bag from a 500g party pack
+    const needGap = sizeOf(product) ? 0.12 : 0.25;
+    return { item: top.c, score: top.s, runnerUp: second ? second.c : null, sure: top.s >= 0.6 && gap >= needGap };
   }
 
   // Words to type into PosPort's search box (it only searches names): most distinctive first.

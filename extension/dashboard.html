@@ -110,6 +110,7 @@
           <ul id="lblLog" class="log"></ul>
         </div>
       </div>
+      <div id="lblIssues" class="issues hidden"></div>
     </section>
 
     <!-- ================= SETTINGS ================= -->
@@ -122,6 +123,7 @@
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
         <label>Items per Bulk Create page<input type="number" id="s_batchSize"></label>
         <label class="check"><input type="checkbox" id="s_extraBlankRow"> Keep one extra empty row (Bulk Create bug)</label>
+        <label class="check"><input type="checkbox" id="s_autoExportFailed"> Download the failed-items Excel automatically after each run</label>
         <label class="check"><input type="checkbox" id="s_autoCreate"> Press "Create" automatically (leave off until you trust it)</label>
         <label class="wide">Advanced: text patterns (JSON, only if PosPort renames buttons)
           <textarea id="s_selectors" rows="6" placeholder='{"addRowButton": "^\\+?\\s*add row$"}'></textarea></label>
