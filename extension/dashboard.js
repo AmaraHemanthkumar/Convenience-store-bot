@@ -339,6 +339,7 @@ $('addFile').addEventListener('change', async (e) => {
   log('Loaded ' + rows.length + ' barcodes from ' + f.name);
   e.target.value = '';
   renderAdd(); saveState();
+  if (rows.length && confirm('Loaded ' + rows.length + ' barcodes. Look up Woolworths and Coles prices now?')) $('addLookup').click();
 });
 
 function applyMarkup(newMarkup) {
@@ -1082,19 +1083,22 @@ function tkOpts() {
     w: pick('tkW', 'tkWc', 2.5), h: pick('tkH', 'tkHc', 1), paper: $('tkPaper').value, shop: $('tkShop').value.trim(),
     barcode: $('tkBarcode').checked, unit: $('tkUnit').checked, date: $('tkDate').checked, border: $('tkBorder').checked,
     layout: $('tkLayout').value,
+    gap: Math.max(0, Math.min(10, parseFloat($('tkGap').value) || 0)),
+    rows: parseInt($('tkRows').value, 10) || 0,
   };
 }
 
 function saveTkOpts() {
   state.tkOpts = { W: $('tkW').value, Wc: $('tkWc').value, H: $('tkH').value, Hc: $('tkHc').value, paper: $('tkPaper').value, shop: $('tkShop').value,
     barcode: $('tkBarcode').checked, unit: $('tkUnit').checked, date: $('tkDate').checked, border: $('tkBorder').checked,
-    layout: $('tkLayout').value, shorten: $('tkShorten').checked, v2: true };
+    layout: $('tkLayout').value, shorten: $('tkShorten').checked, v2: true, gap: $('tkGap').value, rows: $('tkRows').value };
   saveState();
 }
 function loadTkOpts() {
   const o = state.tkOpts || {};
   if (o.W) $('tkW').value = o.W; if (o.Wc) $('tkWc').value = o.Wc; if (o.H) $('tkH').value = o.H; if (o.Hc) $('tkHc').value = o.Hc;
   if (o.paper && o.v2) $('tkPaper').value = o.paper; if (o.shop) $('tkShop').value = o.shop;
+  if (o.gap !== undefined && o.gap !== '') $('tkGap').value = o.gap; if (o.rows) $('tkRows').value = o.rows;
   if (o.layout) $('tkLayout').value = o.layout; if (o.shorten !== undefined) $('tkShorten').checked = o.shorten;
   ['barcode', 'unit', 'date', 'border'].forEach((k) => { if (o[k] !== undefined) $('tk' + k[0].toUpperCase() + k.slice(1)).checked = o[k]; });
   $('tkWc').classList.toggle('hidden', $('tkW').value !== 'custom');
@@ -1197,6 +1201,7 @@ function renderTickets() {
   const copies = list.reduce((a, x) => a + Math.max(1, x.qty || 1), 0);
   $('tkCount').textContent = copies ? copies + ' tickets' + (list.some((x) => !x.price) ? ' · some have no price' : '') : '';
   $('tkPrint').disabled = !copies;
+  $('tkPreview').style.gap = o.paper === 'a4' ? Math.max(o.gap, 0.5) + 'mm' : '12px';
   $('tkPreview').innerHTML = list.slice(0, 40).map((x) => ticketHTML(x, o)).join('') || '<span class="muted">Nothing to preview.</span>';
   fitTickets($('tkPreview'));
 }
@@ -1226,7 +1231,7 @@ $('tkTable').addEventListener('click', (e) => {
   state.tickets.splice(+e.target.closest('tr').dataset.i, 1);
   saveState(); renderTickets();
 });
-['tkW', 'tkH', 'tkPaper', 'tkShop', 'tkBarcode', 'tkUnit', 'tkDate', 'tkBorder', 'tkWc', 'tkHc', 'tkLayout', 'tkShorten'].forEach((id) => {
+['tkW', 'tkH', 'tkPaper', 'tkShop', 'tkBarcode', 'tkUnit', 'tkDate', 'tkBorder', 'tkWc', 'tkHc', 'tkLayout', 'tkShorten', 'tkGap', 'tkRows'].forEach((id) => {
   $(id).addEventListener('input', () => { loadTkOptsVisibility(); saveTkOpts(); renderTickets(); });
   $(id).addEventListener('change', () => { loadTkOptsVisibility(); saveTkOpts(); renderTickets(); });
 });
@@ -1358,10 +1363,15 @@ $('tkPrint').addEventListener('click', () => {
     $('pageStyle').textContent = '@page { size: ' + o.w + 'in ' + o.h + 'in; margin: 0; }';
   } else {
     // A4: our own pages with 8 mm margins, so the browser adds no date/URL headers
-    const M = 8, cols = Math.max(1, Math.floor((210 - 2 * M) / (o.w * 25.4))), rows = Math.max(1, Math.floor((297 - 2 * M) / (o.h * 25.4)));
+    // Printers can't print right to the paper edge, and some are set to Letter (shorter than A4),
+    // so keep 10 mm top/bottom margins plus a safety strip at the bottom, and a gap for cutting.
+    const gap = o.gap, side = 7, top = 10, safe = 12;
+    const cols = Math.max(1, Math.floor((210 - 2 * side + gap) / (o.w * 25.4 + gap)));
+    let rows = Math.max(1, Math.floor((297 - 2 * top - safe + gap) / (o.h * 25.4 + gap)));
+    if (o.rows > 0) rows = o.rows;
     const per = cols * rows, pages = [];
     for (let i = 0; i < list.length; i += per) pages.push(list.slice(i, i + per));
-    area.innerHTML = pages.map((pg) => '<div class="a4page" style="grid-template-columns:repeat(' + cols + ',' + o.w + 'in);grid-auto-rows:' + o.h + 'in">' +
+    area.innerHTML = pages.map((pg) => '<div class="a4page" style="padding:' + top + 'mm ' + side + 'mm;gap:' + gap + 'mm;grid-template-columns:repeat(' + cols + ',' + o.w + 'in);grid-auto-rows:' + o.h + 'in">' +
       pg.map((x) => ticketHTML(x, o)).join('') + '</div>').join('');
     $('pageStyle').textContent = '@page { size: A4; margin: 0; }';
     log(cols + ' × ' + rows + ' = ' + per + ' tickets per A4 page, ' + pages.length + ' page(s).');

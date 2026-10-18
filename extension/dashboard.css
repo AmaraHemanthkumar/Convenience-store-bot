@@ -129,8 +129,9 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
   #printArea { display: block !important; }
   #printArea.roll .ticket { page-break-after: always; break-after: page; }
   #printArea.roll .ticket:last-child { page-break-after: auto; break-after: auto; }
-  #printArea.a4 .a4page { width: 210mm; height: 296mm; box-sizing: border-box; padding: 8mm; display: grid; align-content: start; justify-content: start;
-    page-break-after: always; break-after: page; overflow: hidden; }
+  #printArea.a4 .a4page { width: 210mm; box-sizing: border-box; display: grid; align-content: start; justify-content: start;
+    page-break-after: always; break-after: page; }
+  #printArea.a4 .ticket { break-inside: avoid; page-break-inside: avoid; }
   #printArea.a4 .a4page:last-child { page-break-after: auto; break-after: auto; }
   #printArea.a4 .ticket { outline: 0.5px dashed #888; outline-offset: -0.25px; }
   #printArea.a4 .ticket.bordered { outline: 1px solid #000; }

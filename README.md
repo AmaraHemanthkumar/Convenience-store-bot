@@ -109,7 +109,11 @@ These are made by the bot itself, so you don't need PosPort's label page:
   - *Load Excel / CSV* reads the Excel files the bot saved: price check, price updates, new-items comparison and failed items.
   - It also reads your own sheet with a name column and a price column (barcode, was-price and copies are optional).
   - For a price-check file it uses the **New price** where one is filled in, and asks whether to load only the items whose price changed.
-- **Paper:** *A4 paper* (the default) fits as many as possible per page with cut lines, e.g. 33 tickets of 2.5×1 in. The browser adds no date or address headers. *Label printer roll* prints one ticket per label.
+- **Paper:** *A4 paper* (the default) fits as many as possible per page:
+  - It leaves safe margins so no row is lost at the printer's edge.
+  - **Gap between tickets** (2 mm by default) leaves room for cutting.
+  - **Rows per A4 page** can be raised if your printer allows more.
+  - The browser adds no date or address headers. *Label printer roll* prints one ticket per label.
 - **When printing:** keep scale at **100%** (not "Fit to page"). The barcodes are drawn at exact printer-dot widths, so they print sharp and scan.
 
 ### Settings
