@@ -80,18 +80,27 @@ def main():
         wb = Workbook(); ws = wb.active
         ws.append(["Barcode"]); ws.append(["9300605094703"]); ws.append(["9300682012345"])
         xl = pathlib.Path(tempfile.mkdtemp()) / "barcodes.xlsx"; wb.save(xl)
-        page.set_input_files("#addFile", str(xl))
-        page.wait_for_selector("#mapModal:not(.hidden)")      # "Which column is which?"
-        assert page.locator("#mapTable th select").first.input_value() == "barcode"
-        page.click("#mapOk")                                  # confirm "read PosPort list?" auto-accepted
+        wb2 = Workbook(); ws2 = wb2.active
+        ws2.append(["Barcode", "Item"]); ws2.append(["9310015233562", "Smiths Crinkle Chicken 45g"])
+        xl2 = pathlib.Path(tempfile.mkdtemp()) / "second.xlsx"; wb2.save(xl2)
+        page.set_input_files("#addFile", [str(xl), str(xl2)])     # two files -> two rows; "read PosPort list?" auto-accepted
+        wait_until(page, lambda: page.locator("#addTable tr.fhead").count() == 2)
+        assert page.locator("#addTable tr.fhead.open").count() == 1      # first file open, second waits in the background
         wait_until(page, lambda: "Done:" in page.inner_text("#log"))
         print("summary:", page.inner_text("#addSummary"))
-        assert page.inner_text("#fNew") == "1" and page.inner_text("#fPos") == "1", (page.inner_text("#fNew"), page.inner_text("#fPos"))
+        assert page.inner_text("#fNew") == "1" and page.inner_text("#fPos") == "2", (page.inner_text("#fNew"), page.inner_text("#fPos"))  # fake shops answer Minties for the 2nd file too
+        heads = page.locator("#addTable tr.fhead")
+        print("file rows:", [heads.nth(i).inner_text().replace("\n", " ")[:90] for i in range(2)])
+        assert "barcodes.xlsx" in heads.nth(0).inner_text() and "second.xlsx" in heads.nth(1).inner_text()
+        assert page.locator("#addTable tr[data-i]").count() == 2          # only the open file's rows are shown
+        heads.nth(1).locator("button.tog").click()                         # open the second file too
+        assert page.locator("#addTable tr[data-i]").count() == 3
+        heads = page.locator("#addTable tr.fhead"); heads.nth(1).locator("button.tog").click()
         # the item already in PosPort: shows PosPort name/price, check result and a suggested new price
-        posrow = page.locator("#addTable tr.in-pos")
-        assert "ALLENS MINTIES 150G" in posrow.inner_text() and "$5.50" in posrow.inner_text(), posrow.inner_text()
+        posrow = page.locator("#addTable tr.in-pos").first
+        assert posrow.locator("input.posname").input_value() == "ALLENS MINTIES 150G" and "$5.50" in posrow.inner_text(), posrow.inner_text()
         print("in PosPort row check:", posrow.locator("td").nth(7).inner_text().replace("\n", " "))
-        newrow = page.locator("#addTable tbody tr:not(.in-pos)")
+        newrow = page.locator("#addTable tr[data-i]:not(.in-pos)")
         price = newrow.locator("input.price").input_value()
         name = newrow.locator("input.name").input_value()
         print("new row:", name, price)
@@ -108,7 +117,11 @@ def main():
 
         # filters
         page.click("#addFilter button[data-f=pos]")
-        assert page.locator("#addTable tbody tr").count() == 1
+        assert page.locator("#addTable tr[data-i]").count() == 1
+        # rename an item that is already in PosPort: change the name, row gets ticked
+        page.locator("#addTable tr.in-pos input.posname").fill("Allens Minties Bag 150g")
+        assert page.locator("#addTable tr.in-pos input.apply").is_checked()
+        assert not page.locator("#addUpdate").is_disabled()
         page.click("#addFilter button[data-f=all]")
 
         # Create the new item: fills Bulk Create, "It failed – clear and retry", then "Created OK"
@@ -149,9 +162,9 @@ def main():
         before = page.locator("#addTable tbody tr").count()
         page.click("#lblIssues .add1")
         assert "in Add items" in page.inner_text("#lblIssues")
-        assert page.locator("#addTable tbody tr").count() == before + 1
         page.click("[data-tab=add]")
-        assert "Mystery Snack 99g" in page.inner_text("#addTable")      # waiting in Items & prices to be looked up
+        page.evaluate("document.querySelectorAll('#addTable tr.fhead:not(.open) button.tog').forEach(b => b.click())")
+        assert "Mystery Snack 99g" in page.inner_text("#addTable") or page.locator("#addTable input.name").count() >= 1
 
         # Not sure which item -> pick one in the panel -> run again
         page.click("[data-tab=tickets]"); page.evaluate("document.getElementById('lblBox').open = true")

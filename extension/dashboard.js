@@ -86,16 +86,17 @@ function pause(text) {
 
 // ---------------- persistence ----------------
 async function loadAll() {
-  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts', 'catalogueAt', 'buy']);
+  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts', 'catalogueAt', 'buy', 'files']);
   if (d.settings) S = Object.assign({}, S, d.settings);
   if (!S.namesV2) { if (S.nameMaxLength === 28) S.nameMaxLength = 60; S.namesV2 = true; chrome.storage.local.set({ settings: S }); }
   if (d.categories && d.categories.length) categories = d.categories;
   ['add', 'check', 'checkInput', 'catalogue', 'tickets', 'buy'].forEach((k) => { if (Array.isArray(d[k])) state[k] = d[k]; });
   if (d.tkOpts) state.tkOpts = d.tkOpts;
   state.catalogueAt = d.catalogueAt || 0;
+  state.files = Array.isArray(d.files) ? d.files : [];
 }
 function saveState() {
-  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts, catalogueAt: state.catalogueAt || 0, buy: state.buy });
+  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts, catalogueAt: state.catalogueAt || 0, buy: state.buy, files: state.files || [] });
 }
 
 // ---------------- browser tabs ----------------
@@ -258,6 +259,16 @@ function guessRoles(header, roles, sample) {
   });
 }
 
+// Same window, but returns just the chosen columns (used by "Columns…" on a file)
+function mapColumnsPicks(fileName, rows, roles) {
+  return new Promise((resolve) => {
+    mapColumns(fileName, rows, roles).then((out) => {
+      if (!out) { resolve(null); return; }
+      resolve(lastPicks);
+    });
+  });
+}
+let lastPicks = null;
 let mapResolve = null;
 function mapColumns(fileName, rows, roles, hint) {
   return new Promise((resolve) => {
@@ -293,6 +304,7 @@ function mapColumns(fileName, rows, roles, hint) {
       $('mapModal').classList.add('hidden');
       if (!ok) { resolve(null); return; }
       S.colMaps = Object.assign({}, S.colMaps || {}, { [sig]: picks });
+      lastPicks = picks.slice();
       chrome.storage.local.set({ settings: S });
       const out = body.map((r) => {
         const o = {};
@@ -368,43 +380,107 @@ function checkPill(r) {
   return '<span class="pill ' + cls + '">' + esc(r.chk.status) + '</span>' + d;
 }
 
+const catOptsHTML = (sel) => ['<option value="">— choose —</option>'].concat(categories.map((c) => '<option' + (c === sel ? ' selected' : '') + '>' + esc(c) + '</option>')).join('');
+
+function rowHTML(r, i) {
+  const pos = !!r.pos;
+  const len = (r.name || '').length, tlen = (r.tname || '').length;
+  const ticket = '<div class="tname-row"><span class="muted">ticket</span><input type="text" class="tname" value="' + esc(r.tname || '') + '"><span class="count tcount' + (tlen > S.ticketNameMax ? ' over' : '') + '">' + tlen + '/' + S.ticketNameMax + '</span></div>';
+  const nameCell = pos
+    ? '<input type="text" class="name posname" value="' + esc(r.newName || r.pos.name) + '" title="Change it here and tick the row to rename it in PosPort"><span class="sub">' + (r.newName && r.newName !== r.pos.name ? 'rename from: ' + esc(r.pos.name) : 'name in PosPort') + '</span>' + ticket
+    : '<input type="text" class="name" value="' + esc(r.name || '') + '"><span class="count' + (len > S.nameMaxLength ? ' over' : '') + '">' + len + '/' + S.nameMaxLength + '</span>' + ticket +
+      (r.net ? '<span class="sub">name: ' + esc(r.net.source) + '</span>' : '') +
+      (r.maybe ? '<div class="maybe">Already in PosPort as <b>' + esc(r.maybe.name) + '</b>' + (r.maybe.price ? ' (' + m(r.maybe.price) + ')' : '') + '?<br>' +
+        '<button class="btn small maybe-yes">Yes, same item</button><button class="btn small maybe-no">No, it\'s new</button></div>' : '');
+  return '<tr data-i="' + i + '" class="' + (pos ? 'in-pos' : '') + '">' +
+    (pos ? '<td><input type="checkbox" class="apply" title="Save the new price / name to PosPort" ' + (r.apply ? 'checked' : '') + '></td>'
+         : '<td><input type="checkbox" class="use" title="Create this item" ' + (r.use !== false ? 'checked' : '') + '></td>') +
+    '<td>' + esc(r.barcode) + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
+    '<td>' + (r.status === 'waiting' ? '<span class="muted">…</span>' : storeCell(r.ww)) + '</td><td>' + (r.status === 'waiting' ? '' : storeCell(r.coles)) + '</td>' +
+    '<td class="num">' + m(r.highest) + '</td>' +
+    (pos
+      ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">new price</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–"></td>'
+      : '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '"></td>') +
+    '<td>' + nameCell + '</td>' +
+    '<td>' + (pos ? checkPill(r) : '<select class="cat">' + catOptsHTML(r.category) + '</select>') + '</td>' +
+    '<td>' + addStatusPill(r) + '</td></tr>';
+}
+
+function fileStats(fid) {
+  const rows = state.add.filter((r) => (r.fileId || 'old') === fid);
+  return {
+    n: rows.length, done: rows.filter((r) => r.status !== 'waiting').length,
+    nw: rows.filter((r) => !r.pos).length, ps: rows.filter((r) => r.pos).length,
+    flag: rows.filter((r) => r.pos && r.chk && r.chk.flagged && r.updated !== true).length,
+    attn: rows.filter(needsAttention).length, made: rows.filter((r) => r.status === 'created').length,
+    ready: rows.filter((r) => !r.pos && r.use !== false && (r.status === 'ready' || r.status === 'check')).length,
+    save: rows.filter((r) => r.pos && r.apply && (r.newPrice > 0 || (r.newName && r.newName !== r.pos.name))).length,
+  };
+}
+
+function groupHeadHTML(f) {
+  const st = fileStats(f.id);
+  const pct = st.n ? Math.round(st.done / st.n * 100) : 100;
+  return '<tr class="fhead' + (f.open ? ' open' : '') + '" data-f="' + esc(f.id) + '"><td colspan="9">' +
+    '<div class="fhead-in"><button class="fx tog" title="Show / hide this file">' + (f.open ? '▾' : '▸') + '</button>' +
+    '<b class="fname">' + esc(f.name) + '</b>' +
+    '<span class="fmeta">' + st.n + ' items · ' + (st.done < st.n ? '<span class="fbar"><i style="width:' + pct + '%"></i></span> looking up ' + st.done + '/' + st.n :
+      '<span class="pill ok">looked up</span>') +
+    ' · <b>' + st.nw + '</b> new' + (st.made ? ' (' + st.made + ' created)' : '') + ' · <b>' + st.ps + '</b> in PosPort' + (st.flag ? ' · <span class="pill bad">' + st.flag + ' flagged</span>' : '') +
+    (st.attn ? ' · <span class="pill warn">' + st.attn + ' to check</span>' : '') + '</span>' +
+    '<span class="spacer"></span>' +
+    '<button class="btn small fx" data-act="create"' + (st.ready ? '' : ' disabled') + '>Create ' + st.ready + ' new</button>' +
+    '<button class="btn small fx" data-act="tick"' + (st.flag ? '' : ' disabled') + '>Tick flagged</button>' +
+    '<button class="btn small fx" data-act="save"' + (st.save ? '' : ' disabled') + '>Save ' + st.save + ' changes</button>' +
+    '<button class="btn small fx" data-act="tickets">Tickets</button>' +
+    '<button class="btn small fx" data-act="export">Excel</button>' +
+    (f.raw ? '<button class="btn small fx" data-act="cols" title="Choose which column is which">Columns…</button>' : '') +
+    '<button class="btn small fx" data-act="remove" title="Remove this file from the list">✕</button>' +
+    '</div></td></tr>';
+}
+
+function ensureFiles() {
+  state.files = state.files || [];
+  // rows from before files existed / scanned rows get their own groups
+  if (state.add.some((r) => !r.fileId) && !state.files.some((f) => f.id === 'old')) state.files.push({ id: 'old', name: 'Earlier items', open: true });
+  const ids = new Set(state.add.map((r) => r.fileId || 'old'));
+  state.files = state.files.filter((f) => ids.has(f.id));
+}
+
 function renderAdd() {
+  ensureFiles();
   const t = $('addTable');
   const counts = { all: state.add.length, new: state.add.filter((r) => !r.pos).length, pos: state.add.filter((r) => r.pos).length, attn: state.add.filter(needsAttention).length };
   $('fAll').textContent = counts.all; $('fNew').textContent = counts.new; $('fPos').textContent = counts.pos; $('fAttn').textContent = counts.attn;
   document.querySelectorAll('#addFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === (state.addFilter || 'all')));
-  if (!state.add.length) { t.innerHTML = ''; $('addSummary').textContent = 'No items loaded.'; refreshButtons(); return; }
-  const catOpts = (sel) => ['<option value="">— choose —</option>'].concat(categories.map((c) => '<option' + (c === sel ? ' selected' : '') + '>' + esc(c) + '</option>')).join('');
-  const nameCell = (r) => {
-    const len = (r.name || '').length, tlen = (r.tname || '').length;
-    const ticket = '<div class="tname-row"><span class="muted">ticket</span><input type="text" class="tname" value="' + esc(r.tname || '') + '"><span class="count tcount' + (tlen > S.ticketNameMax ? ' over' : '') + '">' + tlen + '/' + S.ticketNameMax + '</span></div>';
-    if (r.pos) return '<div class="pos-cell"><b>' + esc(r.pos.name) + '</b><span class="sub">name in PosPort</span></div>' + ticket;
-    return '<input type="text" class="name" value="' + esc(r.name || '') + '"><span class="count' + (len > S.nameMaxLength ? ' over' : '') + '">' + len + '/' + S.nameMaxLength + '</span>' + ticket +
-      (r.net ? '<span class="sub">name: ' + esc(r.net.source) + '</span>' : '') +
-      (r.maybe ? '<div class="maybe">Already in PosPort as <b>' + esc(r.maybe.name) + '</b>' + (r.maybe.price ? ' (' + m(r.maybe.price) + ')' : '') + '?<br>' +
-        '<button class="btn small maybe-yes">Yes, same item</button><button class="btn small maybe-no">No, it\'s new</button></div>' : '');
-  };
-  const rows = state.add.map((r, i) => ({ r, i })).filter(({ r }) => inFilter(r));
-  t.innerHTML = '<thead><tr><th title="New items: create · In PosPort: update price"><input type="checkbox" id="addAll"></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th class="num">Highest</th><th class="num">Price</th><th>Name</th><th>Category / check</th><th>Status</th></tr></thead><tbody>' +
-    rows.map(({ r, i }) => {
-      const pos = !!r.pos;
-      return '<tr data-i="' + i + '"' + (pos ? ' class="in-pos"' : '') + '>' +
-        (pos ? '<td><input type="checkbox" class="apply" title="Update this price in PosPort" ' + (r.apply ? 'checked' : '') + '></td>'
-             : '<td><input type="checkbox" class="use" title="Create this item" ' + (r.use !== false ? 'checked' : '') + '></td>') +
-        '<td>' + esc(r.barcode) + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
-        '<td>' + storeCell(r.ww) + '</td><td>' + storeCell(r.coles) + '</td>' +
-        '<td class="num">' + m(r.highest) + '</td>' +
-        (pos
-          ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">new price</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–"></td>'
-          : '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '"></td>') +
-        '<td>' + nameCell(r) + '</td>' +
-        '<td>' + (pos ? checkPill(r) : '<select class="cat">' + catOpts(r.category) + '</select>') + '</td>' +
-        '<td>' + addStatusPill(r) + '</td></tr>';
-    }).join('') + '</tbody>';
+  if (!state.add.length) { t.innerHTML = '<tbody><tr><td class="muted">Choose one or more Excel files, or scan barcodes. Each file appears here as its own row – click it to open the whole sheet.</td></tr></tbody>'; $('addSummary').textContent = ''; refreshButtons(); return; }
+  let html = '<thead><tr><th><input type="checkbox" id="addAll" title="Tick / untick everything shown"></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th class="num">Highest</th><th class="num">Price</th><th>Name</th><th>Category / check</th><th>Status</th></tr></thead>';
+  state.files.forEach((f) => {
+    html += '<tbody class="fgroup" data-f="' + esc(f.id) + '">' + groupHeadHTML(f);
+    if (f.open) state.add.forEach((r, i) => { if ((r.fileId || 'old') === f.id && inFilter(r)) html += rowHTML(r, i); });
+    html += '</tbody>';
+  });
+  t.innerHTML = html;
   const done = state.add.filter((r) => r.status !== 'waiting').length;
-  const ready = state.add.filter((r) => !r.pos && (r.status === 'ready' || r.status === 'check')).length;
-  const flagged = state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length;
-  $('addSummary').textContent = done + '/' + state.add.length + ' looked up · ' + ready + ' new ready to create · ' + flagged + ' PosPort prices flagged';
+  $('addSummary').textContent = state.files.length + ' file(s) · ' + done + '/' + state.add.length + ' looked up' + (lookupRunning ? ' – looking up in the background…' : '');
+  refreshButtons();
+}
+
+// Update one row and its file header without redrawing everything (so typing elsewhere isn't interrupted)
+function refreshRow(r) {
+  const i = state.add.indexOf(r);
+  const fid = r.fileId || 'old';
+  const body = document.querySelector('#addTable tbody.fgroup[data-f="' + CSS.escape(fid) + '"]');
+  if (!body) { renderAdd(); return; }
+  const f = state.files.find((x) => x.id === fid);
+  const head = body.querySelector('tr.fhead');
+  if (head && f) head.outerHTML = groupHeadHTML(f);
+  const tr = body.querySelector('tr[data-i="' + i + '"]');
+  if (tr && !tr.contains(document.activeElement) && inFilter(r)) tr.outerHTML = rowHTML(r, i);
+  else if (!tr && f && f.open && inFilter(r)) renderAdd();
+  const done = state.add.filter((x) => x.status !== 'waiting').length;
+  $('addSummary').textContent = state.files.length + ' file(s) · ' + done + '/' + state.add.length + ' looked up' + (lookupRunning ? ' – looking up in the background…' : '');
+  ['fAll', 'fNew', 'fPos', 'fAttn'].forEach((id, k) => { $(id).textContent = [state.add.length, state.add.filter((x) => !x.pos).length, state.add.filter((x) => x.pos).length, state.add.filter(needsAttention).length][k]; });
   refreshButtons();
 }
 
@@ -419,7 +495,11 @@ $('addTable').addEventListener('input', (e) => {
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
   const c = e.target.classList;
-  if (c.contains('name')) {
+  if (c.contains('posname')) {
+    r.newName = e.target.value.trim() && e.target.value.trim() !== r.pos.name ? e.target.value.trim() : null;
+    r.apply = !!(r.newName || r.newPrice); tr.querySelector('.apply').checked = r.apply;
+    if (!r.tnameEdited) { r.tname = ticketNameOf(r.newName || r.pos.name, ''); tr.querySelector('.tname').value = r.tname; }
+  } else if (c.contains('name')) {
     r.name = e.target.value; r.nameEdited = true;
     const cnt = tr.querySelector('.count');
     cnt.textContent = r.name.length + '/' + S.nameMaxLength;
@@ -434,13 +514,16 @@ $('addTable').addEventListener('input', (e) => {
   }
   if (c.contains('newprice')) {
     r.newPrice = R.parseMoney(e.target.value);
-    r.apply = !!r.newPrice; tr.querySelector('.apply').checked = r.apply;
+    r.apply = !!(r.newPrice || r.newName); tr.querySelector('.apply').checked = r.apply;
   } else if (c.contains('price')) { r.price = R.parseMoney(e.target.value); r.priceEdited = true; }
   saveState(); refreshButtons();
+  const fid = r.fileId || 'old', f = state.files.find((x) => x.id === fid), head = tr.parentElement.querySelector('tr.fhead');
+  if (f && head) head.outerHTML = groupHeadHTML(f);
 });
 $('addTable').addEventListener('change', (e) => {
   if (e.target.id === 'addAll') {
-    state.add.filter(inFilter).forEach((r) => { if (r.pos) r.apply = e.target.checked && !!r.newPrice; else r.use = e.target.checked; });
+    const open = new Set(state.files.filter((f) => f.open).map((f) => f.id));
+    state.add.filter((r) => inFilter(r) && open.has(r.fileId || 'old')).forEach((r) => { if (r.pos) r.apply = e.target.checked && !!(r.newPrice || r.newName); else r.use = e.target.checked; });
     renderAdd(); saveState(); return;
   }
   const tr = e.target.closest('tr[data-i]');
@@ -449,10 +532,12 @@ $('addTable').addEventListener('change', (e) => {
   if (e.target.classList.contains('cat')) r.category = e.target.value;
   if (e.target.classList.contains('use')) r.use = e.target.checked;
   if (e.target.classList.contains('apply')) r.apply = e.target.checked;
-  if (r.status === 'not found' && r.name && r.price && r.category) { r.status = 'ready'; renderAdd(); }
-  saveState(); refreshButtons();
+  if (r.status === 'not found' && r.name && r.price && r.category) r.status = 'ready';
+  saveState(); refreshRow(r);
 });
 $('addTable').addEventListener('click', (e) => {
+  const head = e.target.closest('tr.fhead');
+  if (head) { fileAction(head.dataset.f, e.target.closest('button[data-act]') ? e.target.closest('button[data-act]').dataset.act : 'toggle'); return; }
   const tr = e.target.closest('tr[data-i]');
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
@@ -462,40 +547,98 @@ $('addTable').addEventListener('click', (e) => {
   renderAdd(); saveState();
 });
 
+const ITEM_ROLES = ['barcode', 'name', 'hint', 'category', 'price'];
+
+// Read a sheet without asking: header row (if any) + guessed columns.
+function autoColumns(rows, roles, picksIn) {
+  rows = rows.filter((r) => r.some((c) => String(c).trim() !== ''));
+  if (!rows.length) return { picks: [], body: [] };
+  const width = Math.max(...rows.slice(0, 50).map((r) => r.length));
+  const first = rows[0].map((c) => String(c || '').trim());
+  const hasHeader = first.some((c) => c && !/^[\d.,$\s-]+$/.test(c));
+  const header = hasHeader ? first.concat(Array(Math.max(0, width - first.length)).fill('')) : Array(width).fill('');
+  const body = hasHeader ? rows.slice(1) : rows;
+  const picks = picksIn || ((S.colMaps || {})[header.join('|').toLowerCase()]) || guessRoles(header, roles, body.slice(0, 20));
+  return { picks, body, header };
+}
+
+function itemsFromSheet(rows, picks, fileId, seen) {
+  const ac = autoColumns(rows, ITEM_ROLES, picks);
+  const out = [];
+  ac.body.forEach((r) => {
+    const x = {};
+    ac.picks.forEach((role, i) => { if (role !== '_') x[role] = r[i]; });
+    const barcode = R.cleanBarcode(x.barcode);
+    const name = String(x.name || '').trim(), hint = String(x.hint || '').trim();
+    if (!barcode && !name && !hint) return;
+    const key = barcode || (name || hint).toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const price = R.parseMoney(x.price);
+    const it = { barcode, inName: name, hint, name: '', tname: '', category: String(x.category || '').trim(), overridePrice: price, price, status: 'waiting', use: true, fileId };
+    setNames(it, name, '');
+    out.push(it);
+  });
+  return { items: out, picks: ac.picks };
+}
+
 $('addFile').addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
   if (!files.length) return;
-  const keep = $('addKeep').checked;
-  const list = keep ? state.add.slice() : [];
-  const seen = new Set(list.map((r) => r.barcode || (r.inName || '').toLowerCase()));
-  let added = 0;
+  ensureFiles();
+  const seen = new Set(state.add.map((r) => r.barcode || (r.inName || '').toLowerCase()));
+  const anyOpen = state.files.some((f) => f.open);
+  let first = true;
   for (const f of files) {
-    const mapped = await mapColumns(f.name, await readSheet(f), ['barcode', 'name', 'hint', 'category', 'price']);
-    if (!mapped) { log('Skipped ' + f.name); continue; }
-    let n = 0;
-    mapped.forEach((x) => {
-      const barcode = R.cleanBarcode(x.barcode);
-      const name = String(x.name || '').trim();
-      const hint = String(x.hint || '').trim();
-      if (!barcode && !name && !hint) return;
-      const key = barcode || (name || hint).toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      const price = R.parseMoney(x.price);
-      const r = { barcode, inName: name, hint, name: '', tname: '', category: String(x.category || '').trim(), overridePrice: price, price, status: 'waiting', use: true, file: f.name };
-      setNames(r, name, '');
-      list.push(r); n++;
-    });
-    added += n;
-    log('Loaded ' + n + ' items from ' + f.name);
+    const raw = await readSheet(f);
+    const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const res = itemsFromSheet(raw, null, id, seen);
+    if (!res.items.length) { log(f.name + ': no barcodes or names found – use "Columns…" after loading to pick them.', 'err'); }
+    state.files.push({ id, name: f.name, open: !anyOpen && first, raw: raw.slice(0, 5000), picks: res.picks });
+    state.add.push(...res.items);
+    if (!res.items.length) state.add.push({ barcode: '', inName: '(no rows read)', hint: '', name: '', tname: '', status: 'not found', use: false, fileId: id, note: 'Click "Columns…" on this file' });
+    log('Loaded ' + res.items.length + ' items from ' + f.name);
+    first = false;
   }
-  state.add = list;
-  state.addFilter = 'all';
-  $('addFileInfo').textContent = files.length + ' file(s) — ' + state.add.length + ' items';
   renderAdd(); saveState();
-  if (added) $('addLookup').click();          // straight on: PosPort check + Woolworths/Coles
+  startLookup();
 });
+
+async function fileAction(fid, act) {
+  const f = state.files.find((x) => x.id === fid);
+  if (!f) return;
+  const rows = state.add.filter((r) => (r.fileId || 'old') === fid);
+  if (act === 'toggle') { f.open = !f.open; renderAdd(); saveState(); return; }
+  if (act === 'remove') {
+    if (!confirm('Remove "' + f.name + '" (' + rows.length + ' items) from the list? Nothing in PosPort changes.')) return;
+    state.add = state.add.filter((r) => (r.fileId || 'old') !== fid);
+    state.files = state.files.filter((x) => x.id !== fid);
+    renderAdd(); saveState(); return;
+  }
+  if (act === 'cols') {
+    const mapped = await mapColumnsPicks(f.name, f.raw, ITEM_ROLES);
+    if (!mapped) return;
+    const seen = new Set(state.add.filter((r) => (r.fileId || 'old') !== fid).map((r) => r.barcode || (r.inName || '').toLowerCase()));
+    const res = itemsFromSheet(f.raw, mapped, fid, seen);
+    state.add = state.add.filter((r) => (r.fileId || 'old') !== fid).concat(res.items);
+    f.picks = mapped; f.open = true;
+    renderAdd(); saveState(); startLookup(); return;
+  }
+  if (act === 'tick') { rows.forEach((r) => { if (r.pos && r.chk && r.chk.flagged && r.newPrice && r.updated !== true) r.apply = true; }); f.open = true; renderAdd(); saveState(); return; }
+  if (busy && ['create', 'save', 'cols'].includes(act)) { log('Busy with PosPort – try again in a moment.', 'err'); return; }
+  if (act === 'create') return runCreate(false, fid);
+  if (act === 'save') return runPosUpdates(fid);
+  if (act === 'export') return exportItems(rows, f.name.replace(/\.[^.]+$/, ''));
+  if (act === 'tickets') {
+    const list = rows.filter((r) => r.pos || (r.name && r.price && r.status !== 'not found' && r.use !== false)).map((r) => r.pos
+      ? { full: r.newName || r.pos.name, name: r.tname || ticketNameOf(r.newName || r.pos.name, ''), price: r.updated === true ? r.pos.price : (r.pos.price), barcode: r.barcode }
+      : { full: r.name, name: r.tname || ticketNameOf(r.name, ''), price: r.price, barcode: r.barcode });
+    if (!list.length) { log('Nothing in this file has a name and price yet.', 'err'); return; }
+    addTickets(list);
+    showTab('tickets');
+  }
+}
 
 // Scanner box: a USB/Bluetooth scanner (or a phone app like "Barcode to PC") types the code + Enter
 function scanBox(id, onCode) {
@@ -510,10 +653,12 @@ function scanBox(id, onCode) {
 }
 scanBox('addScan', (code) => {
   if (state.add.some((r) => r.barcode && R.sameBarcode(r.barcode, code))) { log(code + ' is already in the list.'); return; }
-  state.add.unshift({ barcode: code, inName: '', hint: '', name: '', tname: '', category: '', price: null, status: 'waiting', use: true, file: 'scanned' });
+  ensureFiles();
+  if (!state.files.some((f) => f.id === 'scanned')) state.files.unshift({ id: 'scanned', name: 'Scanned barcodes', open: true });
+  state.add.unshift({ barcode: code, inName: '', hint: '', name: '', tname: '', category: '', price: null, status: 'waiting', use: true, fileId: 'scanned' });
   renderAdd(); saveState();
   log('Scanned ' + code);
-  if (!busy) $('addLookup').click();          // otherwise the running lookup picks it up
+  startLookup();
 });
 
 function applyMarkup(newMarkup) {
@@ -597,60 +742,77 @@ async function ensureCatalogue() {
   return state.catalogue.length > 0;
 }
 
-$('addLookup').addEventListener('click', async () => {
-  setBusy(true);
+// Looks up every waiting row in the background, the open file first, so you can work on one file
+// (create, change prices, print) while the next files are being looked up.
+let lookupRunning = false;
+async function startLookup(again) {
+  if (again) state.add.forEach((r) => { if (r.status !== 'created' && r.updated !== true) { r.status = 'waiting'; r.pos = null; r.maybe = null; r.chk = null; } });
+  if (lookupRunning) return;
+  lookupRunning = true;
   try {
-    // A second press looks everything up again (except items already created or updated)
-    if (!state.add.some((r) => ['waiting', 'error', 'not found'].includes(r.status))) {
-      state.add.forEach((r) => { if (r.status !== 'created' && r.updated !== true) { r.status = 'waiting'; r.pos = null; r.maybe = null; r.chk = null; } });
-    }
     await ensureCatalogue();
     $('addScanInfo').textContent = state.catalogue.length ? 'Checked against ' + state.catalogue.length + ' PosPort items' : 'PosPort not checked';
     let n = 0;
     const tried = new Set();
     for (;;) {
-      const r = state.add.find((x) => ['waiting', 'error', 'not found'].includes(x.status) && !tried.has(x));
-      if (!r || stopRequested) break;
+      const waiting = (x) => ['waiting', 'error', 'not found'].includes(x.status) && !tried.has(x) && (x.barcode || x.inName || x.hint);
+      const open = new Set((state.files || []).filter((f) => f.open).map((f) => f.id));
+      const r = state.add.find((x) => waiting(x) && open.has(x.fileId || 'old')) || state.add.find(waiting);
+      if (!r || lookupStop) break;
       tried.add(r);
       n++;
-      log('Looking up ' + (r.barcode || r.inName) + ' (' + n + ')');
-      let res = await lookupPrices(r.barcode, r.inName || r.hint);
-      r.net = null;
-      if (!res.highest || !(res.ww && res.ww.found) && !(res.coles && res.coles.found)) {
-        // Not found by barcode: get the product name from open barcode databases,
-        // then try Woolworths/Coles again by that name.
-        const net = await window.CSB_STORES.internetLookup(r.barcode);
-        if (net && net.found) {
-          r.net = net;
-          log('Name from ' + net.source + ': ' + net.name);
-          const again = await lookupPrices('', [net.name, net.size].filter(Boolean).join(' '));
-          if (again.highest) res = again;
-        }
-      }
-      r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
-      const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
-      const nameSrc = src || r.net;
-      if (nameSrc && !r.inName) setNames(r, nameSrc.name, nameSrc.size);
-      else if (!r.name && r.hint) setNames(r, r.hint, '');
-      if (!r.category) r.category = R.guessCategory(nameSrc ? nameSrc.name : (r.inName || r.hint), (res.ww && res.ww.dept) || (r.net && r.net.dept), categories);
-      r.price = r.overridePrice || R.newItemPrice(res.highest, S);
-      const unsure = [res.ww, res.coles].some((s) => s && s.found && s.match && s.match !== 'barcode');
-      if (r.barcode && !R.validBarcode(r.barcode)) { r.status = 'not found'; r.note = 'This barcode looks mistyped (check digit is wrong) - please re-scan it.'; }
-      else if (!res.highest) { r.status = 'not found'; r.note = 'No price at Woolworths or Coles' + (r.net ? ' (name from ' + r.net.source + ')' : r.name ? ' (name from your sheet)' : ''); }
-      else { r.status = unsure ? 'check' : 'ready'; r.note = unsure ? 'Matched by name – please check it is the same product' : ''; }
-      // already in PosPort?
-      const found = r.notInPos ? { item: null } : findInPos(r);
-      if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how; }
-      else if (found.maybe) r.maybe = found.maybe;
-      renderAdd(); saveState();
+      await lookupOne(r);
+      refreshRow(r); saveState();
     }
-    const nPos = state.add.filter((r) => r.pos).length, nNew = state.add.length - nPos;
-    log('Done: ' + nNew + ' new items, ' + nPos + ' already in PosPort (' + state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length + ' prices flagged).', 'ok');
-    if (S.autoExportFailed && state.add.some((r) => ADD_FAILED.includes(r.status))) $('addFailed').click();
-  } finally { setBusy(false); renderAdd(); }
-});
+    if (n) {
+      const nPos = state.add.filter((r) => r.pos).length, nNew = state.add.length - nPos;
+      log('Done: ' + nNew + ' new items, ' + nPos + ' already in PosPort (' + state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length + ' prices flagged).', 'ok');
+      if (S.autoExportFailed && state.add.some((r) => ADD_FAILED.includes(r.status))) $('addFailed').click();
+    }
+  } finally { lookupRunning = false; lookupStop = false; renderAdd(); }
+}
+let lookupStop = false;
+$('addLookup').addEventListener('click', () => startLookup(true));
+
+async function lookupOne(r) {
+  let res = await lookupPrices(r.barcode, r.inName || r.hint);
+  r.net = null;
+  if (!res.highest || !(res.ww && res.ww.found) && !(res.coles && res.coles.found)) {
+    // Not found by barcode: get the product name from open barcode databases, then try Woolworths/Coles by that name.
+    const net = await window.CSB_STORES.internetLookup(r.barcode);
+    if (net && net.found) {
+      r.net = net;
+      const again = await lookupPrices('', [net.name, net.size].filter(Boolean).join(' '));
+      if (again.highest) res = again;
+    }
+  }
+  r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
+  const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
+  const nameSrc = src || r.net;
+  if (nameSrc && !r.inName) setNames(r, nameSrc.name, nameSrc.size);
+  else if (!r.name && r.hint) setNames(r, r.hint, '');
+  if (!r.category) r.category = R.guessCategory(nameSrc ? nameSrc.name : (r.inName || r.hint), (res.ww && res.ww.dept) || (r.net && r.net.dept), categories);
+  if (!r.priceEdited) r.price = r.overridePrice || R.newItemPrice(res.highest, S);
+  const unsure = [res.ww, res.coles].some((x) => x && x.found && x.match && x.match !== 'barcode');
+  if (r.barcode && !R.validBarcode(r.barcode)) { r.status = 'not found'; r.note = 'This barcode looks mistyped (check digit is wrong) - please re-scan it.'; }
+  else if (!res.highest) { r.status = 'not found'; r.note = 'No price at Woolworths or Coles' + (r.net ? ' (name from ' + r.net.source + ')' : r.name ? ' (name from your sheet)' : ''); }
+  else { r.status = unsure ? 'check' : 'ready'; r.note = unsure ? 'Matched by name – please check it is the same product' : ''; }
+  const found = r.notInPos ? { item: null } : findInPos(r);
+  if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how; }
+  else if (found.maybe) r.maybe = found.maybe;
+}
 
 // ---- update prices of items that are already in PosPort ----
+async function updatePosItem(posName, fields) {
+  if (!(await posGo('/catalog/items', 'items'))) return { ok: false, error: 'Items page did not open' };
+  const s = await pos('searchList', posName, S.delayMs);
+  if (!s || !s.ok) return s || { ok: false, error: 'search failed' };
+  const o = await pos('openItem', posName, S.delayMs);
+  if (!o || !o.ok) return o || { ok: false, error: 'could not open the item' };
+  const tabId = await posTab();
+  await sleep(800); await waitComplete(tabId); await sleep(800);
+  return (await pos('setEditFields', fields, S.delayMs)) || { ok: false, error: 'no answer' };
+}
 async function updatePosPrice(posName, newPrice) {
   if (!(await posGo('/catalog/items', 'items'))) return { ok: false, error: 'Items page did not open' };
   const s = await pos('searchList', posName, S.delayMs);
@@ -676,50 +838,47 @@ $('addTickFlagged').addEventListener('click', () => {
   log(n + ' flagged prices ticked – check the new prices, then press "Update ticked prices".');
 });
 
-$('addUpdate').addEventListener('click', async () => {
-  const todo = state.add.filter((r) => r.pos && r.apply && r.newPrice > 0);
-  if (!todo.length) { log('Tick the PosPort items to update and give them a new price.', 'err'); return; }
-  if (!confirm('Change the price of ' + todo.length + ' items in PosPort?\n\n' + todo.slice(0, 15).map((r) => r.pos.name + ': ' + m(r.pos.price) + ' → ' + m(r.newPrice)).join('\n') + (todo.length > 15 ? '\n…' : ''))) return;
+$('addUpdate').addEventListener('click', () => runPosUpdates(null));
+
+// Save ticked changes (new price and/or new name) for items already in PosPort. fid = only that file.
+async function runPosUpdates(fid) {
+  const todo = state.add.filter((r) => r.pos && r.apply && (!fid || (r.fileId || 'old') === fid) &&
+    (r.newPrice > 0 || (r.newName && r.newName !== r.pos.name)));
+  if (!todo.length) { log('Tick the PosPort items to change and give them a new price or name.', 'err'); return; }
+  const line = (r) => (r.newName && r.newName !== r.pos.name ? r.pos.name + ' → "' + r.newName + '"' : r.pos.name) +
+    (r.newPrice > 0 && r.newPrice !== r.pos.price ? ': ' + m(r.pos.price) + ' → ' + m(r.newPrice) : '');
+  if (!confirm('Save ' + todo.length + ' changes in PosPort?\n\n' + todo.slice(0, 15).map(line).join('\n') + (todo.length > 15 ? '\n…' : ''))) return;
   setBusy(true);
   const done = [];
   try {
     for (const r of todo) {
       if (stopRequested) break;
-      log('Updating ' + r.pos.name + ' → ' + m(r.newPrice));
-      const res = await updatePosPrice(r.pos.name, r.newPrice);
+      const fields = {};
+      if (r.newPrice > 0 && r.newPrice !== r.pos.price) fields.price = r.newPrice;
+      if (r.newName && r.newName !== r.pos.name) fields.name = r.newName;
+      if (!Object.keys(fields).length) { r.apply = false; continue; }
+      log('Saving ' + line(r));
+      const res = await updatePosItem(r.pos.name, fields);
       r.updated = !!(res && res.ok);
-      r.note = r.updated ? 'was ' + m(r.pos.price) : (res && res.error) || 'unknown error';
+      r.note = r.updated ? 'was ' + m(r.pos.price) + (fields.name ? ' / "' + r.pos.name + '"' : '') : (res && res.error) || 'unknown error';
       if (r.updated) {
         const c = state.catalogue.find((x) => x.name === r.pos.name);
-        if (c) c.price = r.newPrice;
-        r.pos.price = r.newPrice; r.apply = false;
-        r.chk = R.checkExistingPrice(r.newPrice, r.highest, S);
-        done.push({ full: r.pos.name, name: r.tname || ticketNameOf(r.pos.name, ''), price: r.newPrice, barcode: r.barcode });
+        if (fields.price) { r.pos.price = fields.price; if (c) c.price = fields.price; }
+        if (fields.name) { if (c) c.name = fields.name; r.pos.name = fields.name; r.newName = null; }
+        r.apply = false;
+        r.chk = R.checkExistingPrice(r.pos.price, r.highest, S);
+        done.push({ full: r.pos.name, name: r.tname || ticketNameOf(r.pos.name, ''), price: r.pos.price, barcode: r.barcode });
       }
-      log(r.pos.name + ': ' + (r.updated ? 'updated' : 'FAILED – ' + r.note), r.updated ? 'ok' : 'err');
-      renderAdd(); saveState();
+      log(r.pos.name + ': ' + (r.updated ? 'saved' : 'FAILED – ' + r.note), r.updated ? 'ok' : 'err');
+      refreshRow(r); saveState();
       if (!r.updated) {
-        const go = await pause('Could not update "' + r.pos.name + '": ' + r.note + '. Continue with the next item?');
+        const go = await pause('Could not save "' + r.pos.name + '": ' + r.note + '. Continue with the next item?');
         if (!go) break;
       }
       await sleep(S.delayMs);
     }
-  } finally { setBusy(false); toPrintList(done, 'changed prices'); }
-});
-
-$('addCats').addEventListener('click', async () => {
-  setBusy(true);
-  try {
-    if (!(await posGo('/catalog/items/bulk', 'bulk'))) return;
-    const res = await pos('bulkGetCategories');
-    if (res && res.ok && res.categories.length) {
-      categories = res.categories;
-      if (!categories.includes('Misc')) categories.push('Misc');
-      log('Loaded ' + categories.length + ' categories from PosPort.', 'ok');
-      saveState(); renderAdd();
-    } else log('Could not read categories: ' + (res && res.error), 'err');
-  } finally { setBusy(false); }
-});
+  } finally { setBusy(false); renderAdd(); toPrintList(done, 'changed items'); }
+}
 
 $('addCreate').addEventListener('click', () => runCreate(false));
 $('addRetry').addEventListener('click', () => runCreate(true));
@@ -732,17 +891,18 @@ async function discardBulk() {
 
 // retry = true: first throw away the half-filled Bulk Create page, then redo every row that
 // failed or was filled but never confirmed as created.
-async function runCreate(retry) {
+async function runCreate(retry, fid) {
+  const inFile = (r) => !fid || (r.fileId || 'old') === fid;
   if (retry) {
-    const redo = state.add.filter((r) => r.status === 'error' || r.status === 'filled');
+    const redo = state.add.filter((r) => inFile(r) && (r.status === 'error' || r.status === 'filled'));
     if (!redo.length) { log('Nothing to retry.', 'err'); return; }
     redo.forEach((r) => { r.status = r.name && r.price > 0 && r.category ? 'ready' : 'not found'; r.note = 'retry'; r.use = true; });
     renderAdd(); saveState();
     setBusy(true);
     try { if (await posTabOnBulk()) await discardBulk(); } finally { setBusy(false); }
   }
-  const todo = state.add.filter((r) => r.use !== false && (r.status === 'ready' || r.status === 'check') && r.name && r.price > 0 && r.category);
-  const skipped = state.add.filter((r) => r.use !== false && !todo.includes(r) && !['created', 'filled', 'exists'].includes(r.status)).length;
+  const todo = state.add.filter((r) => inFile(r) && !r.pos && r.use !== false && (r.status === 'ready' || r.status === 'check') && r.name && r.price > 0 && r.category);
+  const skipped = state.add.filter((r) => inFile(r) && !r.pos && r.use !== false && !todo.includes(r) && !['created', 'filled', 'exists', 'in PosPort'].includes(r.status)).length;
   if (!todo.length) { log('Nothing ready to create (need name, price and category).', 'err'); return; }
   const long = todo.filter((r) => r.name.length > S.nameMaxLength).length;
   if (!confirm((retry ? 'Retry: create ' : 'Create ') + todo.length + ' items in PosPort?' + (skipped ? '\n' + skipped + ' ticked rows are missing a name/price/category and will be skipped.' : '') + (long ? '\n' + long + ' names are longer than ' + S.nameMaxLength + ' characters.' : ''))) return;
@@ -821,8 +981,11 @@ async function posTabOnBulk() {
   return tabs.length > 0;
 }
 
-$('addExport').addEventListener('click', () => {
-  const rows = state.add.map((r) => ({
+$('addExport').addEventListener('click', () => exportItems(state.add, 'items-and-prices'));
+function exportItems(list, base) {
+  const fname = (r) => ((state.files || []).find((f) => f.id === (r.fileId || 'old')) || {}).name || '';
+  const rows = list.map((r) => ({
+    File: fname(r),
     Barcode: r.barcode,
     'Name in PosPort': r.name || '',
     'Ticket name': r.tname || '',
@@ -844,9 +1007,10 @@ $('addExport').addEventListener('click', () => {
     Status: r.status,
     Note: r.note || '',
   }));
-  writeSheet(rows, 'new-items-price-comparison-' + today() + '.xlsx', 'New items');
-  log('Comparison Excel downloaded.', 'ok');
-});
+  if (!rows.length) { log('Nothing to download.', 'err'); return; }
+  writeSheet(rows, base + '-' + today() + '.xlsx', 'Items');
+  log('Excel downloaded.', 'ok');
+}
 
 const ADD_FAILED = ['not found', 'error', 'check', 'skipped'];
 $('addFailed').addEventListener('click', () => {
@@ -1181,8 +1345,11 @@ $('lblIssues').addEventListener('change', (e) => {
 function queueForAdd(r) {
   if (r.queued) return;
   if (r.barcode && state.add.some((a) => a.barcode && R.sameBarcode(a.barcode, r.barcode))) { r.queued = true; return; }
+  ensureFiles();
+  if (!state.files.some((f) => f.id === 'labels')) state.files.unshift({ id: 'labels', name: 'Missing from PosPort (from labels)', open: true });
   state.add.push({ barcode: r.barcode || '', inName: '', hint: r.product && r.product !== r.line ? r.product : (r.barcode ? '' : r.line),
-    name: '', category: '', price: null, status: 'waiting', use: true });
+    name: '', category: '', price: null, status: 'waiting', use: true, fileId: 'labels' });
+  setTimeout(() => startLookup(), 0);
   r.queued = true;
 }
 
@@ -2015,7 +2182,7 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 function refreshButtons() {
   if (busy) return;
   $('addLookup').disabled = !state.add.length;
-  $('addUpdate').disabled = !state.add.some((r) => r.pos && r.apply && r.newPrice > 0);
+  $('addUpdate').disabled = !state.add.some((r) => r.pos && r.apply && (r.newPrice > 0 || (r.newName && r.newName !== r.pos.name)));
   $('addTickFlagged').disabled = !state.add.some((r) => r.pos && r.chk && r.chk.flagged && r.newPrice && r.updated !== true);
   $('addCreate').disabled = !state.add.some((r) => r.status === 'ready' || r.status === 'check');
   $('addRetry').disabled = !state.add.some((r) => r.status === 'error' || r.status === 'filled');

@@ -31,9 +31,8 @@
       <div class="steps">
         <div class="step">
           <h3>1. Load barcodes</h3>
-          <p>One or more Excel/CSV files – you choose which column is the barcode, name, price… The bot then looks up Woolworths &amp; Coles and checks which items you already have in PosPort.</p>
+          <p>Choose one or more Excel/CSV files. Each file becomes one row below – click it to open the whole sheet. Open one and work on it while the others are looked up in the background.</p>
           <label class="btn file primary">Choose Excel files<input type="file" id="addFile" accept=".xlsx,.xls,.csv" multiple></label>
-          <label class="check small-note"><input type="checkbox" id="addKeep"> add to the list (don't replace)</label>
           <span id="addFileInfo" class="muted"></span>
           <div class="row">
             <input type="text" id="addScan" class="scanbox" placeholder="Scan / type a barcode + Enter" autocomplete="off">
@@ -52,12 +51,13 @@
         </div>
         <div class="step">
           <h3>3. Save to PosPort</h3>
+          <p class="small-note muted">Each file row has its own buttons too. For items already in PosPort you can change the <b>price</b> and the <b>name</b> – tick the row and save.</p>
           <div class="row">
-            <button id="addCreate" class="btn primary" disabled>Create new items</button>
+            <button id="addCreate" class="btn primary" disabled>Create all new items</button>
             <button id="addRetry" class="btn small" disabled title="Cancel the half-filled Bulk Create page and try the failed/unfinished rows again">Retry unfinished</button>
           </div>
           <div class="row">
-            <button id="addUpdate" class="btn primary" disabled>Update ticked prices</button>
+            <button id="addUpdate" class="btn primary" disabled>Save ticked changes</button>
             <button id="addTickFlagged" class="btn small" disabled>Tick all flagged</button>
           </div>
           <div class="row"><button id="addCats" class="btn small">Load categories from PosPort</button></div>

@@ -57,3 +57,14 @@ document.getElementById('listSearch').addEventListener('input',e=>setTimeout(()=
 document.getElementById('next').onclick=()=>{ if(page===1){page=2;drawItems('');} else document.getElementById('next').disabled=true; };
 </script>
 </body></html>
+<!-- item edit form (appears when an item link is opened with #edit) -->
+<div id="editForm" style="display:none">
+  <label>Item Name</label><div><input id="eName" type="text"></div>
+  <label>Price ($)</label><div><input id="ePrice" type="number"></div>
+  <button id="eSave">Save</button>
+  <div id="toast" role="status"></div>
+</div>
+<script>
+document.getElementById('eSave').onclick = () => { document.getElementById('toast').textContent = 'Item updated successfully'; window.savedItem = { name: eName.value, price: ePrice.value }; };
+window.openEdit = (n, p) => { document.getElementById('editForm').style.display = ''; eName.value = n; ePrice.value = p; };
+</script>

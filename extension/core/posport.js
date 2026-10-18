@@ -20,6 +20,7 @@
     printLabelsButton: /print\s*labels?/i,
     saveButton: /^(save|save changes|update|update item|save item)$/i,
     priceLabel: /^(selling\s*)?price(\s*\(\$\))?\s*\*?$/i,
+    nameLabel: /^(item\s*|product\s*)?name\s*\*?$/i,
     successToast: /(success|created|updated|saved)/i,
     errorToast: /(error|failed|invalid|required|already exists)/i,
   };
@@ -419,13 +420,13 @@
   }
 
   // ---------- item edit ----------
-  function priceInputOnEdit() {
-    const labels = Array.from(document.querySelectorAll('label,span,p,div')).filter((l) => visible(l) && SEL.priceLabel.test(norm(l.textContent)) && l.children.length <= 2);
+  function inputByLabel(re, wantNumber) {
+    const labels = Array.from(document.querySelectorAll('label,span,p,div')).filter((l) => visible(l) && re.test(norm(l.textContent)) && l.children.length <= 2);
     for (const l of labels) {
       if (l.htmlFor) { const el = document.getElementById(l.htmlFor); if (el) return el; }
       let p = l.parentElement;
       for (let k = 0; k < 3 && p; k++, p = p.parentElement) {
-        const ins = inputs(p).filter((i) => visible(i) && !i.disabled && !i.readOnly);
+        const ins = inputs(p).filter((i) => visible(i) && !i.disabled && !i.readOnly && (wantNumber || i.type !== 'number'));
         if (ins.length === 1) return ins[0];
         if (ins.length > 1) {
           const after = ins.find((i) => l.compareDocumentPosition(i) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -435,25 +436,41 @@
     }
     return null;
   }
+  const priceInputOnEdit = () => inputByLabel(SEL.priceLabel, true);
+  const nameInputOnEdit = () => inputByLabel(SEL.nameLabel) ||
+    inputs().find((i) => visible(i) && /item name|product name|^name$/i.test(i.placeholder || i.getAttribute('aria-label') || i.name || ''));
 
   function readEditPrice() {
     const el = priceInputOnEdit();
-    return el ? { ok: true, price: parseFloat(el.value) } : { ok: false, error: 'Price box not found on this page.' };
+    const nm = nameInputOnEdit();
+    return el ? { ok: true, price: parseFloat(el.value), name: nm ? nm.value : null } : { ok: false, error: 'Price box not found on this page.' };
   }
 
-  async function setEditPrice(price, delay) {
-    const el = await waitFor(priceInputOnEdit, 6000);
-    if (!el) return { ok: false, error: 'Price box not found on the item page.' };
-    const old = el.value;
-    setValue(el, Number(price).toFixed(2)); blur(el);
+  // Change price and/or name on the open item page, then press Save.
+  async function setEditFields(fields, delay) {
+    const f = fields || {};
+    const old = {};
+    if (f.price !== undefined && f.price !== null) {
+      const el = await waitFor(priceInputOnEdit, 6000);
+      if (!el) return { ok: false, error: 'Price box not found on the item page.' };
+      old.price = el.value;
+      setValue(el, Number(f.price).toFixed(2)); blur(el);
+    }
+    if (f.name) {
+      const el = await waitFor(nameInputOnEdit, 6000);
+      if (!el) return { ok: false, error: 'Name box not found on the item page.', old };
+      old.name = el.value;
+      setValue(el, f.name); blur(el);
+    }
     await sleep(delay || 300);
     const btn = findByText(SEL.saveButton, document, 'button');
     if (!btn) return { ok: false, error: 'Save/Update button not found.', old };
     realClick(btn);
     const msg = await waitFor(() => toasts().find((t) => SEL.successToast.test(t) || SEL.errorToast.test(t)), 6000);
     if (msg && SEL.errorToast.test(msg) && !SEL.successToast.test(msg)) return { ok: false, error: msg, old };
-    return { ok: true, old, message: msg || 'saved (no message shown)' };
+    return { ok: true, old: old.price, oldName: old.name, message: msg || 'saved (no message shown)' };
   }
+  const setEditPrice = (price, delay) => setEditFields({ price }, delay);
 
   // ---------- backup helpers ----------
   // Links in the Back Office menu (same site only, never log-out).
@@ -508,7 +525,7 @@
 
   root.CSB_POSPORT = {
     SEL, applyOverrides, pageInfo, bulkStatus, ensureRows, fillBulkRow, bulkGetCategories, clickCreate, cancelBulk,
-    readListRows, searchList, tickRow, clickPrintLabels, nextPage, openItem, readEditPrice, setEditPrice,
+    readListRows, searchList, tickRow, clickPrintLabels, nextPage, openItem, readEditPrice, setEditPrice, setEditFields,
     captured, clearCaptured, toasts, menuLinks, readTable,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

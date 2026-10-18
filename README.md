@@ -30,13 +30,20 @@ After you download a newer version, press the ↻ reload button on the extension
 Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths, Coles and PosPort in their own tabs and works in them, so leave those tabs open while it runs.
 
 ### 1 · Items & prices (new items and price checks in one go)
-1. **Choose Excel files** (one or several at once, or scan barcodes into the scan box). For each file, a **"Which column is which?"** window shows the first rows with a drop-down above each column. Set them to Barcode, Name, Supplier text, Category, Price, or "–" to ignore. The bot remembers your choice for files with the same layout. Then it works through the list by itself:
-   - It reads your PosPort item list, if it hasn't in the last 12 hours.
-   - It looks up Woolworths and Coles normal prices, falling back to the free barcode databases when neither shop knows the barcode.
-   - It sorts every barcode into one of two groups:
+1. **Choose Excel files** (one or several at once), or scan barcodes into the scan box.
+   - **Each file becomes one row** with its name, progress and counts: new · in PosPort · flagged · to check.
+   - Click the row to **open the whole sheet** and work on it.
+   - The bot reads the columns by itself. If a file comes out wrong, use **Columns…** on that file's row to pick them.
+   - **The open file is looked up first**, and the other files keep being looked up in the background while you work.
+   - **Each file row has its own buttons:** Create N new · Tick flagged · Save N changes · Tickets (send the whole file to the print list) · Excel · ✕ remove.
+
+   For every barcode the bot:
+   - reads your PosPort item list, if it hasn't in the last 12 hours;
+   - looks up Woolworths and Coles normal prices, falling back to the free barcode databases when neither shop knows the barcode;
+   - sorts it into one of two groups:
      - **New – not in PosPort:** our price is the highest price + markup, the name is the real product name, and a short ticket name and category are made for you.
-     - **Already in PosPort:** shows the PosPort name and price, **TOO LOW / TOO HIGH / OK** against the highest supermarket price, and a suggested new price.
-   - If it's unsure, it asks: *"Already in PosPort as …? Yes, same item / No, it's new"*.
+     - **Already in PosPort:** shows the PosPort price, **TOO LOW / TOO HIGH / OK**, and a suggested new price. The **PosPort name can be edited**: change it, the row is ticked, and **Save changes** renames the item in the Back Office (and changes the price if you set one).
+   - asks when it's unsure: *"Already in PosPort as …? Yes, same item / No, it's new"*.
 2. Use the filters (**All · New · Already in PosPort · Needs attention**) and edit anything you like. The **Markup $** box changes all new prices at once.
 3. Save to PosPort:
    - **Create new items** fills Bulk Create (with one spare row). See *If creating fails* below.

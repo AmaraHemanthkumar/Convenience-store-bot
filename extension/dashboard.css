@@ -185,3 +185,15 @@ tr.in-pos td { background: #fafcff; }
 #mapTable th .colname { display: block; font-weight: 400; color: var(--muted); margin-top: 3px; font-size: 12px; }
 .verdict { font-weight: 600; }
 .verdict.bad { color: var(--bad); } .verdict.ok { color: var(--ok); } .verdict.warn { color: var(--warn); }
+
+tr.fhead td { background: #f3f1ed; border-top: 2px solid var(--line); padding: 7px 8px; }
+tr.fhead.open td { background: var(--accent-soft); }
+.fhead-in { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fhead-in .tog { border: 0; background: none; font-size: 16px; cursor: pointer; width: 22px; }
+.fhead-in .fname { cursor: pointer; font-size: 14px; }
+.fmeta { color: var(--muted); font-size: 12.5px; }
+.fbar { display: inline-block; width: 70px; height: 6px; background: #ddd; border-radius: 3px; vertical-align: middle; overflow: hidden; }
+.fbar i { display: block; height: 100%; background: var(--accent); }
+.grid input.posname { font-weight: 600; }
+.fhead-in { flex-wrap: nowrap; } .fmeta { flex: 1 1 auto; min-width: 0; } .fhead-in .btn { white-space: nowrap; }
+@media (max-width: 1200px) { .fhead-in { flex-wrap: wrap; } }
