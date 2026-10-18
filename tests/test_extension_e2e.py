@@ -73,6 +73,13 @@ def main():
         assert name == "Allens Minties Lollies 150g" or name.startswith("Allens Minties"), name
         assert cat == "CONFECTIONERY", cat
 
+        # markup can be changed on the Add tab
+        page.fill("#addMarkup", "2")
+        page.click("#addApplyMarkup")
+        assert page.locator("#addTable tbody tr").first.locator("input.price").input_value() == "6.50"
+        page.fill("#addMarkup", "1.5")
+        page.click("#addApplyMarkup")
+
         # Create: fills the (mock) Bulk Create page, then waits for the user to press Create
         page.click("#addCreate")
         page.wait_for_selector("#banner:not(.hidden)", timeout=60000)
@@ -126,6 +133,22 @@ def main():
         page.click("#issRerun")
         wait_until(page, lambda: "Print labels (1 items)" in page.inner_text("#lblLog"))
         assert "✓ ALLENS MINTIES 150G" in page.inner_text("#lblLog"), page.inner_text("#lblLog")
+        # My tickets: bring new items in, preview and print to a 2.5 x 1 in page
+        page.click("[data-tab=tickets]")
+        page.fill("#tkPaste", "Kit Kat Chunky King 70g | 3.99 | 9300605094703")
+        page.click("#tkAddLines")
+        assert page.locator("#tkPreview .ticket").count() == 1
+        assert "$3.99 per 100g" not in page.inner_text("#tkPreview") and "$5.70 per 100g" in page.inner_text("#tkPreview")
+        page.evaluate("window.print = () => {}")
+        page.click("#tkPrint")
+        page.emulate_media(media="print")
+        pdf = pathlib.Path(tempfile.mkdtemp()) / "t.pdf"
+        page.pdf(path=str(pdf), prefer_css_page_size=True)
+        page.emulate_media(media="screen")
+        from pypdf import PdfReader
+        box = PdfReader(str(pdf)).pages[0].mediabox
+        assert (round(float(box.width) / 72, 2), round(float(box.height) / 72, 2)) == (2.5, 1.0), box
+        page.click("[data-tab=labels]")
         # Price check: scan the mock list, then compare a name-only sheet
         page.click("[data-tab=check]")
         page.click("#chkScan")

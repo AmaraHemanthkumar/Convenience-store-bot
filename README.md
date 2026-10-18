@@ -30,6 +30,7 @@ After you download a newer version, press the ↻ reload button on the extension
 Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths, Coles and PosPort in their own tabs and works in them, so leave those tabs open while it runs.
 
 ### 1 · Add new items
+1. **Markup.** Set the markup at the top of *Look up prices* (default $1.50) and press **Apply to table**. Prices you typed yourself are kept.
 1. **Choose Excel file.** This is a sheet with a `Barcode` column (see `samples/barcodes-template.xlsx`). The optional `Name`, `Category` and `Price` columns override what the bot would choose.
 2. **Look up prices.** For each barcode the table shows:
    - the Woolworths and Coles normal prices, with any special shown in orange;
@@ -58,6 +59,16 @@ Paste item names (one per line, exactly as in PosPort) or load them from Excel, 
 
 If the bot has already seen the PosPort ID of every item, it skips the ticking and opens the Print labels page with all of them directly.
 
+### Short names
+The first word (brand) is never changed. When a name is too long, the bot shortens it in this order:
+1. Drops filler words (bag, bottle, with…).
+2. Uses shelf shorthand: Classic→CLS, Special→SPL, Chocolate→CHOC, Chicken→CHKN, Sour Cream→S/CRM, Sugar Free→S/F and about 100 more. Add your own in **Settings** (`Classic=CLS`, one per line).
+3. Drops words like *Potato Chips*, *Pasta Sauce* or *Cup A Soup*.
+4. Squeezes long words to their consonants (Cauliflower→CLFLW).
+5. As a last resort, drops middle words.
+
+The size always stays. **Redo short names** remakes the names after you change the length or shorthand. Names you typed yourself are kept.
+
 ### Items that weren't ticked
 After a labels run, every item the bot couldn't tick is listed under **Not ticked**:
 - **Is it one of these PosPort items?** Shows the closest PosPort items with their price and match %. Pick the right one, then press **Run labels again with my picks**.
@@ -73,6 +84,15 @@ Each tab has a **Download failed items** button, and the file also downloads aut
 - the name from the barcode databases;
 - the closest PosPort items and the words that were searched;
 - ready-made Woolworths and Coles search links.
+
+### 4 · My tickets (print your own shelf tickets)
+These are made by the bot itself, so you don't need PosPort's label page:
+- **Sizes:** 2.5 or 3 inches wide, 1 or 1.25 inches tall, or any custom size.
+- **On each ticket:** the name (as large as fits on 2 lines), a big price, the size, the unit price (e.g. $6.32 per 100g), and a scannable barcode (EAN-13/EAN-8/UPC; anything else is drawn as Code 128). Optionally the shop name and date.
+- **Specials:** fill in **Was $** and the ticket gets a black SPECIAL tag with the old price crossed out.
+- **Where items come from:** new items, price-check changes, the Labels list, or pasted lines like `Name | Price | Barcode`.
+- **Paper:** *Label roll* prints one ticket per page at exactly the ticket size. *A4 sheet* fits as many as possible, with cut lines.
+- **When printing:** set margins to **None** and scale to **100%**.
 
 ### Settings
 Here you can change:

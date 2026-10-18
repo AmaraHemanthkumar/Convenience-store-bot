@@ -81,3 +81,55 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
 .issues { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-top: 12px; }
 .issues h3 { margin: 0; font-size: 15px; }
 .pick { display: flex; margin: 2px 0; font-size: 13px; }
+.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.small-num { width: 80px; font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.form code { background: #f1efeb; padding: 0 4px; border-radius: 4px; }
+
+/* ---------- My tickets ---------- */
+.tk-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.tk-opts label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 13px; }
+.tk-opts select, .tk-opts input[type=text] { font: inherit; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; color: var(--text); }
+.tk-table { max-height: 300px; margin-bottom: 10px; }
+.tk-h { margin: 14px 0 8px; font-size: 15px; }
+.tk-sheet { display: flex; flex-wrap: wrap; gap: 12px; background: #e9e7e3; padding: 14px; border-radius: 10px; }
+.grid input.tk-name { width: 260px; }
+.grid input.tk-bc { width: 130px; }
+.grid input.tk-qty { width: 50px; }
+
+.ticket {
+  --tw: 2.5in; --th: 1in;
+  width: var(--tw); height: var(--th); box-sizing: border-box; background: #fff; color: #000;
+  font-family: Arial, "Helvetica Neue", Helvetica, sans-serif; position: relative; overflow: hidden;
+  padding: 0.045in 0.07in 0.04in; display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto 1fr;
+  grid-template-areas: "name name" "info price"; column-gap: 0.06in;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.ticket.bordered { outline: 1px solid #000; outline-offset: -1px; }
+.t-name { grid-area: name; font-weight: 700; line-height: 1.08; font-size: 11pt; max-height: 2.2em; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.t-info { grid-area: info; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; gap: 0.01in; }
+.t-meta { font-size: 6.5pt; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t-meta b { font-weight: 700; }
+.t-bc { height: calc(var(--th) * 0.27); width: 100%; max-width: 1.45in; display: block; }
+.t-bc svg { width: 100%; height: 100%; display: block; fill: #000; }
+.t-digits { font-size: 5.5pt; letter-spacing: 0.04em; line-height: 1; font-family: "Courier New", monospace; }
+.t-price { grid-area: price; align-self: end; display: flex; align-items: flex-start; line-height: 0.82; font-weight: 800; white-space: nowrap; }
+.t-price .cur { font-size: 0.42em; margin-top: 0.08em; margin-right: 0.02em; }
+.t-price .dol { font-size: 1em; letter-spacing: -0.02em; }
+.t-price .cts { font-size: 0.48em; margin-top: 0.06em; margin-left: 0.02em; }
+.t-was { position: absolute; top: 0; right: 0; background: #000; color: #fff; font-size: 6pt; font-weight: 700; padding: 0.015in 0.05in; letter-spacing: 0.06em; }
+.t-was s { font-weight: 400; margin-left: 0.04in; }
+.t-shop { font-size: 5.5pt; color: #333; }
+.ticket.has-was .t-name { padding-right: 0.72in; }
+
+#printArea, #pageStyle { display: none; }
+@media print {
+  body { background: #fff !important; margin: 0; }
+  body > *:not(#printArea) { display: none !important; }
+  #printArea { display: block !important; }
+  #printArea.roll .ticket { page-break-after: always; break-after: page; }
+  #printArea.roll .ticket:last-child { page-break-after: auto; break-after: auto; }
+  #printArea.a4 { display: flex !important; flex-wrap: wrap; gap: 0; align-content: flex-start; }
+  #printArea.a4 .ticket { outline: 0.5px dashed #888; outline-offset: -0.25px; break-inside: avoid; }
+  #printArea.a4 .ticket.bordered { outline: 1px solid #000; }
+}

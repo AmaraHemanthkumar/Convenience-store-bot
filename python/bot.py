@@ -83,12 +83,14 @@ class Bot:
         self.logic = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         self.logic.goto("about:blank")
         self.logic.add_script_tag(path=str(CORE / "rules.js"))
+        self.logic.evaluate("t => CSB_RULES.setAbbreviations(t)", self.settings.get("abbrevs", ""))
         self.categories = self.rules("DEFAULT_CATEGORIES") if not self.settings.get("categories") else self.settings["categories"]
 
     # ---------- settings ----------
     def load_settings(self):
         s = {"markup": 1.5, "flagLow": 1.5, "flagHigh": 2.0, "nameMaxLength": 28, "delayMs": 700,
-             "batchSize": 20, "extraBlankRow": True, "autoCreate": False, "selectors": {}}
+             "batchSize": 20, "extraBlankRow": True, "autoCreate": False, "selectors": {},
+             "abbrevs": "Classic=CLS\nSpecial=SPL"}
         if SETTINGS_FILE.exists():
             try:
                 s.update(json.loads(SETTINGS_FILE.read_text()))
@@ -108,6 +110,7 @@ class Bot:
     def rules(self, name, *args):
         if not self.logic.evaluate("typeof CSB_RULES !== 'undefined'"):
             self.logic.add_script_tag(path=str(CORE / "rules.js"))
+            self.logic.evaluate("t => CSB_RULES.setAbbreviations(t)", self.settings.get("abbrevs", ""))
         if not args and name.isupper():
             return self.logic.evaluate(f"CSB_RULES.{name}")
         return self.logic.evaluate("([n, a]) => CSB_RULES[n](...a)", [name, list(args)])

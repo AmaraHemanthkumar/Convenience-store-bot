@@ -10,7 +10,7 @@ const STORES = {
 
 let S = Object.assign({}, R.DEFAULT_SETTINGS, { selectors: {} });
 let categories = R.DEFAULT_CATEGORIES.slice();
-const state = { add: [], check: [], checkInput: [], catalogue: [], labels: [] };
+const state = { add: [], check: [], checkInput: [], catalogue: [], labels: [], tickets: [], tkOpts: {} };
 let busy = false;
 let stopRequested = false;
 
@@ -57,13 +57,14 @@ function pause(text) {
 
 // ---------------- persistence ----------------
 async function loadAll() {
-  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue']);
+  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts']);
   if (d.settings) S = Object.assign({}, S, d.settings);
   if (d.categories && d.categories.length) categories = d.categories;
-  ['add', 'check', 'checkInput', 'catalogue'].forEach((k) => { if (Array.isArray(d[k])) state[k] = d[k]; });
+  ['add', 'check', 'checkInput', 'catalogue', 'tickets'].forEach((k) => { if (Array.isArray(d[k])) state[k] = d[k]; });
+  if (d.tkOpts) state.tkOpts = d.tkOpts;
 }
 function saveState() {
-  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories });
+  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts });
 }
 
 // ---------------- browser tabs ----------------
@@ -267,12 +268,12 @@ $('addTable').addEventListener('input', (e) => {
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
   if (e.target.classList.contains('name')) {
-    r.name = e.target.value;
+    r.name = e.target.value; r.nameEdited = true;
     const c = tr.querySelector('.count');
     c.textContent = r.name.length + '/' + S.nameMaxLength;
     c.classList.toggle('over', r.name.length > S.nameMaxLength);
   }
-  if (e.target.classList.contains('price')) r.price = R.parseMoney(e.target.value);
+  if (e.target.classList.contains('price')) { r.price = R.parseMoney(e.target.value); r.priceEdited = true; }
   saveState();
 });
 $('addTable').addEventListener('change', (e) => {
@@ -295,6 +296,37 @@ $('addFile').addEventListener('change', async (e) => {
   log('Loaded ' + rows.length + ' barcodes from ' + f.name);
   e.target.value = '';
   renderAdd(); saveState();
+});
+
+function applyMarkup(newMarkup) {
+  S.markup = newMarkup;
+  chrome.storage.local.set({ settings: S });
+  let n = 0;
+  state.add.forEach((r) => {
+    if (r.priceEdited || r.overridePrice || !r.highest || r.status === 'created') return;
+    r.price = R.newItemPrice(r.highest, S); n++;
+  });
+  $('s_markup').value = S.markup;
+  renderAdd(); saveState();
+  log('Markup set to ' + m(S.markup) + ' – ' + n + ' prices updated (prices you typed yourself were kept).', 'ok');
+}
+$('addApplyMarkup').addEventListener('click', () => {
+  const v = parseFloat($('addMarkup').value);
+  if (!isFinite(v) || v < 0) { log('Type a markup like 1.50', 'err'); return; }
+  applyMarkup(R.round2(v));
+});
+$('addMarkup').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addApplyMarkup').click(); });
+$('addRename').addEventListener('click', () => {
+  let n = 0;
+  state.add.forEach((r) => {
+    if (r.nameEdited || r.status === 'created') return;
+    const src = (r.ww && r.ww.found && r.ww) || (r.coles && r.coles.found && r.coles) || r.net;
+    const full = r.inName || (src && src.name) || r.hint;
+    if (!full) return;
+    r.name = R.shortName(full, r.inName ? '' : (src && src.size) || '', S.nameMaxLength); n++;
+  });
+  renderAdd(); saveState();
+  log(n + ' names made again (names you typed yourself were kept).', 'ok');
 });
 
 $('addLookup').addEventListener('click', async () => {
@@ -458,6 +490,8 @@ $('addFailed').addEventListener('click', () => {
   }));
   downloadFailed(rows, 'add-items-failed', 'Failed');
 });
+
+$('addToTickets').addEventListener('click', () => { $('tkFromAdd').click(); showTab('tickets'); });
 
 $('addToLabels').addEventListener('click', () => {
   const names = state.add.filter((r) => r.status === 'created' || r.status === 'filled').map((r) => r.name);
@@ -946,6 +980,222 @@ $('lblRun').addEventListener('click', async () => {
   } finally { setBusy(false); }
 });
 
+
+// =====================================================================
+// 4. MY TICKETS – our own shelf tickets, printed from here
+// =====================================================================
+const B = window.CSB_BARCODE;
+
+function tkOpts() {
+  const pick = (sel, custom, def) => {
+    const v = $(sel).value === 'custom' ? parseFloat($(custom).value) : parseFloat($(sel).value);
+    return isFinite(v) && v > 0.4 && v < 8 ? v : def;
+  };
+  return {
+    w: pick('tkW', 'tkWc', 2.5), h: pick('tkH', 'tkHc', 1), paper: $('tkPaper').value, shop: $('tkShop').value.trim(),
+    barcode: $('tkBarcode').checked, unit: $('tkUnit').checked, date: $('tkDate').checked, border: $('tkBorder').checked,
+  };
+}
+
+function saveTkOpts() {
+  state.tkOpts = { W: $('tkW').value, Wc: $('tkWc').value, H: $('tkH').value, Hc: $('tkHc').value, paper: $('tkPaper').value, shop: $('tkShop').value,
+    barcode: $('tkBarcode').checked, unit: $('tkUnit').checked, date: $('tkDate').checked, border: $('tkBorder').checked };
+  saveState();
+}
+function loadTkOpts() {
+  const o = state.tkOpts || {};
+  if (o.W) $('tkW').value = o.W; if (o.Wc) $('tkWc').value = o.Wc; if (o.H) $('tkH').value = o.H; if (o.Hc) $('tkHc').value = o.Hc;
+  if (o.paper) $('tkPaper').value = o.paper; if (o.shop) $('tkShop').value = o.shop;
+  ['barcode', 'unit', 'date', 'border'].forEach((k) => { if (o[k] !== undefined) $('tk' + k[0].toUpperCase() + k.slice(1)).checked = o[k]; });
+  $('tkWc').classList.toggle('hidden', $('tkW').value !== 'custom');
+  $('tkHc').classList.toggle('hidden', $('tkH').value !== 'custom');
+}
+
+function sizeFromName(name) {
+  const m = String(name || '').match(/(\d+\s?x\s?\d+(?:\.\d+)?\s?(?:g|kg|ml|l)|\d+(?:\.\d+)?\s?(?:g|kg|ml|l))\b/ig);
+  return m ? m[m.length - 1] : '';
+}
+
+function addTickets(items) {
+  let n = 0;
+  items.forEach((it) => {
+    if (!it.name) return;
+    const dup = state.tickets.find((t) => t.name.toLowerCase() === it.name.toLowerCase());
+    if (dup) { if (it.price) dup.price = it.price; if (it.barcode && !dup.barcode) dup.barcode = it.barcode; return; }
+    state.tickets.push({ name: it.name, price: it.price || null, was: it.was || null, barcode: it.barcode || '', size: it.size || sizeFromName(it.name), qty: 1, use: true });
+    n++;
+  });
+  saveState(); renderTickets();
+  log(n + ' tickets added' + (items.length - n ? ', ' + (items.length - n) + ' already there (updated)' : '') + '.', 'ok');
+}
+
+function ticketHTML(t, o) {
+  const price = R.parseMoney(t.price);
+  const dollars = price === null ? '–' : String(Math.floor(price + 1e-9));
+  const cents = price === null ? '' : '.' + String(Math.round((price - Math.floor(price + 1e-9)) * 100)).padStart(2, '0');
+  const unit = o.unit && price ? R.unitPrice(price, t.size || t.name) : '';
+  const enc = o.barcode && t.barcode ? B.encode(t.barcode) : null;
+  const was = R.parseMoney(t.was);
+  const meta = [t.size ? '<b>' + esc(t.size) + '</b>' : '', unit ? esc(unit) : ''].filter(Boolean).join(' · ');
+  const foot = [o.shop ? esc(o.shop) : '', o.date ? new Date().toLocaleDateString('en-AU') : ''].filter(Boolean).join(' · ');
+  const special = was && price && was > price;
+  return '<div class="ticket' + (o.border ? ' bordered' : '') + (special ? ' has-was' : '') + '" style="--tw:' + o.w + 'in;--th:' + o.h + 'in">' +
+    (was && price && was > price ? '<div class="t-was">SPECIAL<s>' + m(was) + '</s></div>' : '') +
+    '<div class="t-name">' + esc(t.name) + '</div>' +
+    '<div class="t-info">' +
+      (meta ? '<div class="t-meta">' + meta + '</div>' : '') +
+      (enc ? '<div class="t-bc">' + B.barcodeSVG(t.barcode) + '</div><div class="t-digits">' + esc(enc.text) + '</div>' : '') +
+      (foot ? '<div class="t-shop">' + foot + '</div>' : '') +
+    '</div>' +
+    '<div class="t-price"><span class="cur">$</span><span class="dol">' + dollars + '</span><span class="cts">' + cents + '</span></div>' +
+  '</div>';
+}
+
+// Make the name as big as possible within 2 lines, and the price as big as the space allows.
+function fitTickets(root) {
+  root.querySelectorAll('.ticket').forEach((el) => {
+    const h = el.getBoundingClientRect().height;
+    const nm = el.querySelector('.t-name');
+    let fs = Math.min(13, h / 96 * 72 * 0.2);        // start: ~20% of ticket height, in pt
+    nm.style.fontSize = fs + 'pt';
+    while (fs > 6 && (nm.scrollHeight > nm.clientHeight + 1)) { fs -= 0.5; nm.style.fontSize = fs + 'pt'; }
+    const pr = el.querySelector('.t-price');
+    const info = el.querySelector('.t-info');
+    const room = h - nm.getBoundingClientRect().height - 6;
+    let ps = Math.max(10, room * 0.95);               // px
+    pr.style.fontSize = ps + 'px';
+    const maxW = el.getBoundingClientRect().width * (el.querySelector('.t-bc') ? 0.48 : 0.62);
+    while (ps > 10 && (pr.getBoundingClientRect().width > maxW || pr.getBoundingClientRect().height > room)) { ps -= 1; pr.style.fontSize = ps + 'px'; }
+    if (info) info.style.maxHeight = room + 'px';
+  });
+}
+
+function renderTickets() {
+  const t = $('tkTable');
+  const o = tkOpts();
+  if (!state.tickets.length) {
+    t.innerHTML = '<tbody><tr><td class="muted">No tickets yet – bring items in from the other tabs or paste lines above.</td></tr></tbody>';
+  } else {
+    t.innerHTML = '<thead><tr><th><input type="checkbox" id="tkAll" checked></th><th>Name on ticket</th><th class="num">Price $</th><th class="num">Was $ <span class="muted">(special)</span></th><th>Size</th><th>Barcode</th><th class="num">Copies</th><th></th></tr></thead><tbody>' +
+      state.tickets.map((x, i) => '<tr data-i="' + i + '"><td><input type="checkbox" class="use" ' + (x.use !== false ? 'checked' : '') + '></td>' +
+        '<td><input type="text" class="tk-name" value="' + esc(x.name) + '"></td>' +
+        '<td class="num"><input type="number" step="0.01" class="price tk-price" value="' + (x.price ? Number(x.price).toFixed(2) : '') + '"></td>' +
+        '<td class="num"><input type="number" step="0.01" class="price tk-was" value="' + (x.was ? Number(x.was).toFixed(2) : '') + '"></td>' +
+        '<td><input type="text" class="tk-size price" value="' + esc(x.size || '') + '"></td>' +
+        '<td><input type="text" class="tk-bc" value="' + esc(x.barcode || '') + '">' + (x.barcode && !B.encode(x.barcode) ? '' : (x.barcode && B.encode(x.barcode).type === 'Code 128' ? '<span class="sub">not a shop barcode – drawn as Code 128</span>' : '')) + '</td>' +
+        '<td class="num"><input type="number" min="1" class="tk-qty" value="' + (x.qty || 1) + '"></td>' +
+        '<td><button class="btn small tk-del" title="Remove">✕</button></td></tr>').join('') + '</tbody>';
+  }
+  const list = state.tickets.filter((x) => x.use !== false);
+  const copies = list.reduce((a, x) => a + Math.max(1, x.qty || 1), 0);
+  $('tkCount').textContent = copies ? copies + ' tickets' + (list.some((x) => !x.price) ? ' · some have no price' : '') : '';
+  $('tkPrint').disabled = !copies;
+  $('tkPreview').innerHTML = list.slice(0, 40).map((x) => ticketHTML(x, o)).join('') || '<span class="muted">Nothing to preview.</span>';
+  fitTickets($('tkPreview'));
+}
+
+$('tkTable').addEventListener('input', (e) => {
+  const tr = e.target.closest('tr[data-i]');
+  if (!tr) return;
+  const x = state.tickets[+tr.dataset.i];
+  const c = e.target.classList;
+  if (c.contains('tk-name')) x.name = e.target.value;
+  if (c.contains('tk-price')) x.price = R.parseMoney(e.target.value);
+  if (c.contains('tk-was')) x.was = R.parseMoney(e.target.value);
+  if (c.contains('tk-size')) x.size = e.target.value;
+  if (c.contains('tk-bc')) x.barcode = e.target.value.replace(/\s/g, '');
+  if (c.contains('tk-qty')) x.qty = Math.max(1, parseInt(e.target.value, 10) || 1);
+  saveState();
+  clearTimeout(window.__tkT);
+  window.__tkT = setTimeout(() => { $('tkPreview').innerHTML = state.tickets.filter((t) => t.use !== false).slice(0, 40).map((t) => ticketHTML(t, tkOpts())).join(''); fitTickets($('tkPreview')); }, 250);
+});
+$('tkTable').addEventListener('change', (e) => {
+  if (e.target.id === 'tkAll') { state.tickets.forEach((x) => { x.use = e.target.checked; }); saveState(); renderTickets(); return; }
+  const tr = e.target.closest('tr[data-i]');
+  if (tr && e.target.classList.contains('use')) { state.tickets[+tr.dataset.i].use = e.target.checked; saveState(); renderTickets(); }
+});
+$('tkTable').addEventListener('click', (e) => {
+  if (!e.target.classList.contains('tk-del')) return;
+  state.tickets.splice(+e.target.closest('tr').dataset.i, 1);
+  saveState(); renderTickets();
+});
+['tkW', 'tkH', 'tkPaper', 'tkShop', 'tkBarcode', 'tkUnit', 'tkDate', 'tkBorder', 'tkWc', 'tkHc'].forEach((id) => {
+  $(id).addEventListener('input', () => { loadTkOptsVisibility(); saveTkOpts(); renderTickets(); });
+  $(id).addEventListener('change', () => { loadTkOptsVisibility(); saveTkOpts(); renderTickets(); });
+});
+function loadTkOptsVisibility() {
+  $('tkWc').classList.toggle('hidden', $('tkW').value !== 'custom');
+  $('tkHc').classList.toggle('hidden', $('tkH').value !== 'custom');
+}
+
+$('tkFromAdd').addEventListener('click', () => {
+  const rows = state.add.filter((r) => r.use !== false && r.name && r.price && ['created', 'filled', 'ready', 'check'].includes(r.status));
+  if (!rows.length) { log('No new items with a name and price yet.', 'err'); return; }
+  addTickets(rows.map((r) => {
+    const src = (r.ww && r.ww.found && r.ww) || (r.coles && r.coles.found && r.coles) || r.net || {};
+    return { name: r.name, price: r.price, barcode: r.barcode, size: sizeFromName(r.name) || src.size || '' };
+  }));
+});
+$('tkFromCheck').addEventListener('click', () => {
+  const rows = state.check.filter((r) => r.posName && (r.applied === true || r.newPrice || r.ours));
+  if (!rows.length) { log('Run a price check first.', 'err'); return; }
+  const changed = rows.filter((r) => r.applied === true || (r.apply && r.newPrice));
+  const use = changed.length ? changed : rows;
+  addTickets(use.map((r) => ({ name: r.posName, price: r.applied === true ? r.ours : (r.newPrice || r.ours), barcode: r.barcode })));
+  if (changed.length) log('Added the ' + changed.length + ' items whose price changed.', 'ok');
+});
+$('tkFromLabels').addEventListener('click', () => {
+  const lines = $('lblNames').value.split('\n').map((x) => x.trim()).filter(Boolean);
+  if (!lines.length) { log('The Labels list is empty.', 'err'); return; }
+  const done = (state.labels || []).filter((r) => r.status === 'ticked');
+  const items = lines.map((line) => {
+    const hit = done.find((r) => r.line === line);
+    const name = hit ? hit.posName : line;
+    const cat = state.catalogue.find((c) => c.name.toLowerCase() === String(name).toLowerCase()) ||
+      (state.catalogue.length ? (() => { const mm = R.posMatch(name, state.catalogue, (c) => c.name); return mm.sure ? mm.item : null; })() : null);
+    const isBc = /^\d{7,14}$/.test(line);
+    return { name: cat ? cat.name : (isBc ? '' : name), price: cat ? cat.price : null, barcode: isBc ? line : (cat && cat.barcode) || '' };
+  });
+  const missing = items.filter((x) => !x.name).length;
+  addTickets(items.filter((x) => x.name));
+  if (missing) log(missing + ' barcodes have no known name yet – run them on the Labels tab first.', 'err');
+  if (items.some((x) => x.name && !x.price)) log('Some tickets have no price – run "Scan PosPort items" on Price check, or type the price.', 'err');
+});
+$('tkAddLines').addEventListener('click', () => {
+  const items = $('tkPaste').value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const parts = l.split(/\s*[|\t;]\s*/);
+    const name = parts[0];
+    const price = parts.slice(1).map(R.parseMoney).find((x) => x !== null && x < 1000);
+    const barcode = (parts.slice(1).find((x) => /^\d{7,14}$/.test(x.replace(/\s/g, ''))) || '').replace(/\s/g, '');
+    return { name, price, barcode };
+  });
+  addTickets(items);
+  $('tkPaste').value = '';
+});
+$('tkClear').addEventListener('click', () => {
+  if (state.tickets.length && !confirm('Remove all ' + state.tickets.length + ' tickets from the list?')) return;
+  state.tickets = []; saveState(); renderTickets();
+});
+
+$('tkPrint').addEventListener('click', () => {
+  const o = tkOpts();
+  const list = [];
+  state.tickets.filter((x) => x.use !== false).forEach((x) => { for (let i = 0; i < Math.max(1, x.qty || 1); i++) list.push(x); });
+  if (list.some((x) => !x.price) && !confirm('Some tickets have no price and will show "$–". Print anyway?')) return;
+  const area = $('printArea');
+  area.className = o.paper;
+  area.innerHTML = list.map((x) => ticketHTML(x, o)).join('');
+  $('pageStyle').textContent = o.paper === 'roll'
+    ? '@page { size: ' + o.w + 'in ' + o.h + 'in; margin: 0; }'
+    : '@page { size: A4; margin: 8mm; }';
+  area.style.display = 'block';
+  area.style.position = 'absolute'; area.style.left = '-10000px';
+  fitTickets(area);
+  area.style.display = ''; area.style.position = ''; area.style.left = '';
+  window.print();
+  log('Sent ' + list.length + ' tickets to the printer.', 'ok');
+});
+
 // =====================================================================
 // SETTINGS
 // =====================================================================
@@ -956,6 +1206,9 @@ function fillSettings() {
   $('s_autoCreate').checked = !!S.autoCreate;
   $('s_autoExportFailed').checked = S.autoExportFailed !== false;
   $('s_selectors').value = S.selectors && Object.keys(S.selectors).length ? JSON.stringify(S.selectors, null, 2) : '';
+  $('s_abbrevs').value = S.abbrevs || '';
+  $('addMarkup').value = Number(S.markup).toFixed(2);
+  R.setAbbreviations(S.abbrevs || '');
   $('lowLbl').textContent = m(S.flagLow);
   $('highLbl').textContent = m(S.flagHigh);
 }
@@ -964,6 +1217,7 @@ $('sSave').addEventListener('click', async () => {
   S.extraBlankRow = $('s_extraBlankRow').checked;
   S.autoCreate = $('s_autoCreate').checked;
   S.autoExportFailed = $('s_autoExportFailed').checked;
+  S.abbrevs = $('s_abbrevs').value;
   const raw = $('s_selectors').value.trim();
   try { S.selectors = raw ? JSON.parse(raw) : {}; } catch (e) { $('sInfo').textContent = 'Patterns are not valid JSON.'; return; }
   await chrome.storage.local.set({ settings: S });
@@ -990,6 +1244,7 @@ $('sTest').addEventListener('click', async () => {
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('hidden', p.id !== 'tab-' + name));
+  if (name === 'tickets') renderTickets();
 }
 document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -999,6 +1254,7 @@ function refreshButtons() {
   $('addCreate').disabled = !state.add.some((r) => r.status === 'ready' || r.status === 'check' || r.status === 'error');
   $('addExport').disabled = !state.add.some((r) => r.status !== 'waiting');
   $('addToLabels').disabled = !state.add.some((r) => r.name);
+  $('addToTickets').disabled = !state.add.some((r) => r.name && r.price);
   $('chkLookup').disabled = !state.checkInput.length;
   $('chkExport').disabled = !state.check.length;
   $('chkApply').disabled = !state.check.some((r) => r.apply);
@@ -1013,5 +1269,6 @@ function refreshButtons() {
   if (state.catalogue.length) $('chkScanInfo').textContent = state.catalogue.length + ' items from last scan';
   if (state.checkInput.length) $('chkFileInfo').textContent = state.checkInput.length + ' items loaded';
   renderAdd(); renderCheck(); refreshButtons();
+  loadTkOpts(); renderTickets();
   log('Ready. Keep PosPort Back Office logged in, in this Chrome window.');
 })();

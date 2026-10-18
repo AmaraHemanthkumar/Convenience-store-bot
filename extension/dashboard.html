@@ -13,6 +13,7 @@
       <button class="tab active" data-tab="add" role="tab">1 · Add new items</button>
       <button class="tab" data-tab="check" role="tab">2 · Price check</button>
       <button class="tab" data-tab="labels" role="tab">3 · Labels</button>
+      <button class="tab" data-tab="tickets" role="tab">4 · My tickets</button>
       <button class="tab" data-tab="settings" role="tab">Settings</button>
     </nav>
   </header>
@@ -36,7 +37,14 @@
         <div class="step">
           <h3>Look up prices</h3>
           <p>Checks Woolworths and Coles (normal price, not specials). Our price = highest + markup.</p>
-          <button id="addLookup" class="btn primary" disabled>Look up prices</button>
+          <div class="row">
+            <label class="inline">Markup $ <input type="number" step="0.05" min="0" id="addMarkup" class="small-num"></label>
+            <button id="addApplyMarkup" class="btn small">Apply to table</button>
+          </div>
+          <div class="row">
+            <button id="addLookup" class="btn primary" disabled>Look up prices</button>
+            <button id="addRename" class="btn small" title="Make the label names again with the current length and shorthand list">Redo short names</button>
+          </div>
         </div>
         <div class="step">
           <h3>Check &amp; create</h3>
@@ -53,6 +61,7 @@
         <button id="addExport" class="btn" disabled>Download comparison Excel</button>
         <button id="addFailed" class="btn" disabled>Download failed items</button>
         <button id="addToLabels" class="btn" disabled>Send names to Labels</button>
+        <button id="addToTickets" class="btn" disabled>Make my own tickets</button>
       </div>
       <div class="tablewrap"><table id="addTable" class="grid"></table></div>
     </section>
@@ -113,6 +122,49 @@
       <div id="lblIssues" class="issues hidden"></div>
     </section>
 
+    <!-- ================= MY TICKETS ================= -->
+    <section id="tab-tickets" class="panel hidden">
+      <div class="steps">
+        <div class="step">
+          <h3>Items</h3>
+          <p>Bring items in from the other tabs, or paste lines like <code>Name | Price | Barcode</code>.</p>
+          <div class="row">
+            <button id="tkFromAdd" class="btn small">From new items</button>
+            <button id="tkFromCheck" class="btn small">From price check</button>
+            <button id="tkFromLabels" class="btn small">From Labels list</button>
+          </div>
+          <textarea id="tkPaste" rows="3" placeholder="Allens Minties 150g | 5.70 | 9300682012345"></textarea>
+          <div class="row"><button id="tkAddLines" class="btn small">Add these lines</button><button id="tkClear" class="btn small">Clear all</button></div>
+        </div>
+        <div class="step">
+          <h3>Ticket size &amp; look</h3>
+          <div class="tk-opts">
+            <label>Width <select id="tkW"><option value="2.5">2.5 in</option><option value="3">3 in</option><option value="custom">custom…</option></select>
+              <input type="number" step="0.05" id="tkWc" class="small-num hidden" placeholder="in"></label>
+            <label>Height <select id="tkH"><option value="1">1 in</option><option value="1.25">1.25 in</option><option value="custom">custom…</option></select>
+              <input type="number" step="0.05" id="tkHc" class="small-num hidden" placeholder="in"></label>
+            <label>Paper <select id="tkPaper"><option value="roll">Label roll – one ticket per label</option><option value="a4">A4 sheet – cut out</option></select></label>
+            <label>Shop name <input type="text" id="tkShop" placeholder="(optional)"></label>
+          </div>
+          <div class="row">
+            <label class="check"><input type="checkbox" id="tkBarcode" checked> Barcode</label>
+            <label class="check"><input type="checkbox" id="tkUnit" checked> Unit price</label>
+            <label class="check"><input type="checkbox" id="tkDate"> Date</label>
+            <label class="check"><input type="checkbox" id="tkBorder" checked> Border</label>
+          </div>
+        </div>
+        <div class="step">
+          <h3>Print</h3>
+          <p>Check the preview (shown at real size), then print. In the print window choose your label printer or A4 printer, and set margins to <b>None</b> and scale to <b>100%</b>.</p>
+          <button id="tkPrint" class="btn primary" disabled>Print tickets</button>
+          <span id="tkCount" class="muted"></span>
+        </div>
+      </div>
+      <div class="tablewrap tk-table"><table id="tkTable" class="grid"></table></div>
+      <h3 class="tk-h">Preview</h3>
+      <div id="tkPreview" class="tk-sheet"></div>
+    </section>
+
     <!-- ================= SETTINGS ================= -->
     <section id="tab-settings" class="panel hidden">
       <div class="form">
@@ -120,6 +172,8 @@
         <label>Flag if less than this above highest ($)<input type="number" step="0.01" id="s_flagLow"></label>
         <label>Flag if more than this above highest ($)<input type="number" step="0.01" id="s_flagHigh"></label>
         <label>Max label name length<input type="number" id="s_nameMaxLength"></label>
+        <label class="wide">Your shorthand for long names (one per line, e.g. <code>Classic=CLS</code>). The first word (brand) is never shortened.
+          <textarea id="s_abbrevs" rows="4" placeholder="Classic=CLS&#10;Special=SPL&#10;Chocolate=CHOC"></textarea></label>
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
         <label>Items per Bulk Create page<input type="number" id="s_batchSize"></label>
         <label class="check"><input type="checkbox" id="s_extraBlankRow"> Keep one extra empty row (Bulk Create bug)</label>
@@ -136,10 +190,13 @@
     </section>
   </main>
 
+  <div id="printArea"></div>
+  <style id="pageStyle"></style>
   <footer><ul id="log" class="log"></ul></footer>
 
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="core/rules.js"></script>
+  <script src="core/barcode.js"></script>
   <script src="core/stores.js"></script>
   <script src="dashboard.js"></script>
 </body>

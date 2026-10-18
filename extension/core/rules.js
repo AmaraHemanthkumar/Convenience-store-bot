@@ -111,15 +111,51 @@
   const SIZE_RE = /(\d+\s?x\s?\d+(?:\.\d+)?\s?(?:g|kg|ml|l)\b|\d+(?:\.\d+)?\s?(?:g|kg|ml|l|pk|pack|pce|pcs|pieces|tabs|sheets|ea)\b)/i;
   const FILLER = ['Bag', 'Packet', 'Bottle', 'Can', 'Tub', 'Box', 'Jar', 'Share', 'Sharing',
     'Lollies', 'Block', 'Variety', 'Value', 'Snack', 'Sweets', 'Soft', 'Each', 'Carton',
-    'Pouch', 'Tray', 'Sachet', 'Punnet', 'Flavoured', 'Flavour', 'Range', 'Australian', 'Chewing'];
-  // Parent brands that can go when a product brand follows (Wrigleys Extra -> Extra)
-  const OWNER_BRANDS = ['Wrigleys', 'Arnotts', 'Kelloggs', 'Nestle', 'Mondelez', 'Peters', 'Sanitarium', 'Unilever'];
-  const ABBREV = [
-    [/\bChocolate\b/gi, 'Choc'], [/\bOriginal\b/gi, 'Orig'], [/\bStrawberry\b/gi, 'Strawb'],
-    [/\bAssorted\b/gi, 'Asst'], [/\bVanilla\b/gi, 'Van'], [/\bSparkling\b/gi, 'Spark'],
-    [/\bFull Cream\b/gi, 'F/Cream'], [/\bWholemeal\b/gi, 'W/Meal'], [/\bMultipack\b/gi, 'M/Pk'],
-    [/\bLight\b/gi, 'Lite'], [/\bSugar Free\b/gi, 'S/Free'], [/\bChicken\b/gi, 'Chkn'],
-  ];
+    'Pouch', 'Tray', 'Sachet', 'Punnet', 'Flavoured', 'Flavour', 'Range', 'Australian', 'Chewing',
+    'With', 'And', 'The', 'Of', 'In', 'For', 'Serves', 'Pack', 'Pk'];
+
+  // Shelf-ticket shorthand. The first word (brand) is never changed; these are only used when the
+  // name is too long. Extra ones can be added in Settings ("Classic=CLS" one per line).
+  const BASE_ABBREV = {
+    'sugar free': 'S/F', 'sour cream': 'S/CRM', 'full cream': 'F/CRM', 'salt and vinegar': 'S&V', 'salt & vinegar': 'S&V',
+    'sea salt': 'SEA SLT', 'sweet chilli': 'SWT CHLI', 'honey soy': 'HNY SOY', 'cheese and onion': 'CHS&ON', 'cheese & onion': 'CHS&ON',
+    'classic': 'CLS', 'classics': 'CLS', 'special': 'SPL', 'original': 'ORIG', 'chocolate': 'CHOC', 'strawberry': 'STRAW',
+    'raspberry': 'RASP', 'blueberry': 'BLUEB', 'watermelon': 'WMELON', 'peppermint': 'PEPMNT', 'spearmint': 'SPRMNT',
+    'bubblemint': 'BUBMNT', 'vanilla': 'VAN', 'caramel': 'CRML', 'chicken': 'CHKN', 'cheese': 'CHS', 'cream': 'CRM',
+    'creamy': 'CRMY', 'tomato': 'TOM', 'garlic': 'GRLC', 'onion': 'ON', 'vinegar': 'VIN', 'barbecue': 'BBQ',
+    'natural': 'NAT', 'regular': 'REG', 'large': 'LGE', 'medium': 'MED', 'small': 'SML', 'family': 'FAM',
+    'assorted': 'ASST', 'mixed': 'MIX', 'tropical': 'TROP', 'pineapple': 'PNAPL', 'orange': 'ORNG', 'lemonade': 'LEMDE',
+    'sparkling': 'SPKL', 'mineral': 'MIN', 'energy': 'ENRGY', 'drink': 'DRK', 'juice': 'JCE', 'water': 'WTR',
+    'coconut': 'CCNUT', 'peanut': 'PNUT', 'butter': 'BTR', 'biscuits': 'BISC', 'biscuit': 'BISC', 'cookies': 'CKIES',
+    'crackers': 'CRKRS', 'noodles': 'NDLS', 'noodle': 'NDL', 'instant': 'INST', 'chilli': 'CHLI', 'sweet': 'SWT',
+    'honey': 'HNY', 'multipack': 'M/PK', 'wholemeal': 'W/MEAL', 'croutons': 'CRTNS', 'pumpkin': 'PMPKN',
+    'cauliflower': 'CAULI', 'sensations': 'SENS', 'flavour': 'FLV', 'mango': 'MNGO', 'passionfruit': 'PASSNFT',
+    'lemon': 'LMN', 'lime': 'LIME', 'ginger': 'GNGR', 'coffee': 'COF', 'iced': 'ICD', 'milk': 'MLK', 'dark': 'DRK',
+    'white': 'WHT', 'mint': 'MNT', 'berry': 'BRY', 'fruit': 'FRT', 'cherry': 'CHRY', 'grape': 'GRP', 'apple': 'APL',
+    'gluten': 'GLTN', 'free': 'FR', 'tablets': 'TABS', 'capsules': 'CAPS', 'caplets': 'CPLTS', 'pieces': 'PCS',
+  };
+  const GENERIC = ['a', 'potato', 'chips', 'crisps', 'pasta', 'sauce', 'soup', 'cup', 'style', 'snack', 'drink',
+    'bar', 'bars', 'no', 'gum', 'lolly', 'candy', 'sweets', 'confectionery', 'beverage', 'soft'];
+  const TWO_WORD_BRANDS = ['san remo', 'red rock', 'red bull', 'mount franklin', 'uncle tobys', 'old el', 'la espanola',
+    'sun rice', 'john west', 'golden circle', 'cobs popcorn', 'black & gold', 'dairy farmers', 'big m', 'nu pure', 'pop top'];
+  let EXTRA_ABBREV = {};
+  function setAbbreviations(text) {
+    EXTRA_ABBREV = {};
+    String(text || '').split(/\r?\n|,/).forEach((line) => {
+      const m = line.match(/^\s*([^=]+?)\s*=\s*(.+?)\s*$/);
+      if (m) EXTRA_ABBREV[m[1].toLowerCase()] = m[2];
+    });
+  }
+  function abbrevTable() { return Object.assign({}, BASE_ABBREV, EXTRA_ABBREV); }
+
+  // Generic shorthand for a word with no fixed abbreviation: keep the first letter and the consonants
+  // ("Cauliflower" -> "CLFLWR"), at most `len` letters.
+  function squeeze(word, len) {
+    const w = word.replace(/[^A-Za-z]/g, '');
+    if (w.length <= 4) return word;
+    const out = (w[0] + w.slice(1).replace(/[aeiou]/gi, '')).replace(/(.)\1+/gi, '$1').toUpperCase();
+    return out.slice(0, len || 5);
+  }
 
   function titleCase(s) {
     return s.toLowerCase().replace(/(^|[\s\-/(])([a-z])/g, (m, p, c) => p + c.toUpperCase())
@@ -137,6 +173,9 @@
     const letters = s.replace(/[^A-Za-z]/g, '');
     if (letters && letters === letters.toUpperCase()) s = titleCase(s);
 
+    s = s.replace(/\bserves\s+\d+\b/ig, ' ').replace(/\s+/g, ' ').trim();
+    // "31g x 2 pack" / "31g x 2" -> "2x31g"
+    s = s.replace(/(\d+(?:\.\d+)?)\s?(g|ml|l|kg)\s?x\s?(\d+)(\s?(pack|pk))?\b/i, (m0, q, u, n) => n + 'x' + q + u);
     // find the size: prefer the explicit one, else the last size-looking token
     let sz = size ? normaliseSize(size) : '';
     let core = s;
@@ -157,30 +196,74 @@
     const join = (c) => (sz ? (c + ' ' + sz).trim() : c);
     if (join(core).length <= max) return join(core);
 
-    // 1. drop filler words (never the first word = brand)
+    // From here on the brand (first word, or first two for "San Remo", "Red Rock"…) is kept exactly as it is.
     let words = core.split(' ');
-    words = [words[0]].concat(words.slice(1).filter((w) => FILLER.indexOf(w.replace(/[^A-Za-z]/g, '').replace(/^./, (c) => c.toUpperCase())) === -1 && !/^(bag|packet|bottle|can|lollies|block|each)$/i.test(w)));
-    core = words.join(' ');
+    const twoWord = words.length > 2 && (words[0].replace(/[^A-Za-z]/g, '').length <= 3 || TWO_WORD_BRANDS.indexOf((words[0] + ' ' + words[1]).toLowerCase()) !== -1);
+    const brand = twoWord ? words[0] + ' ' + words[1] : words[0];
+    let rest = words.slice(twoWord ? 2 : 1);
+    const fits = () => join([brand].concat(rest).join(' ')).length <= max;
+
+    // 1. drop filler words
+    rest = rest.filter((w) => FILLER.indexOf(w.replace(/[^A-Za-z]/g, '').toLowerCase().replace(/^./, (c) => c.toUpperCase())) === -1);
+    if (fits()) return join([brand].concat(rest).join(' '));
+
+    // 2. known shorthand (multi-word phrases first, then single words, longest words first)
+    const table = abbrevTable();
+    let text = rest.join(' ');
+    Object.keys(table).filter((k) => k.indexOf(' ') !== -1).sort((a, b) => b.length - a.length).forEach((k) => {
+      if (join(brand + ' ' + text).length > max) text = text.replace(new RegExp('\\b' + k.replace(/[.*+?^${}()|[\]\\&]/g, '\\$&') + '\\b', 'ig'), table[k]);
+    });
+    rest = text.split(' ').filter(Boolean);
+    const order = rest.map((w, i) => i).sort((a, b) => rest[b].length - rest[a].length);
+    for (const i of order) {
+      if (fits()) break;
+      const key = rest[i].toLowerCase().replace(/[^a-z&]/g, '');
+      if (table[key]) rest[i] = table[key];
+    }
+    if (fits()) return join([brand].concat(rest).join(' '));
+
+    // 3. drop generic product-type words that the shelf already tells you (Potato Chips, Pasta Sauce, Cup A Soup)
+    for (let i = 0; i < rest.length && !fits(); i++) {
+      if (GENERIC.indexOf(rest[i].toLowerCase()) !== -1 && rest.length > 1) { rest.splice(i, 1); i--; }
+    }
+    if (fits()) return join([brand].concat(rest).join(' '));
+
+    // 4. squeeze the longest remaining words ("Cauliflower" -> "CLFLW")
+    for (let pass = 0; pass < rest.length && !fits(); pass++) {
+      let li = -1;
+      rest.forEach((w, i) => { if (/[a-z]{5,}/.test(w) && (li < 0 || w.length > rest[li].length)) li = i; });
+      if (li < 0) break;
+      rest[li] = squeeze(rest[li]);
+    }
+    if (fits()) return join([brand].concat(rest).join(' '));
+
+    // 5. drop words (brand and size always stay)
+    // middle words go first: the word right after the brand (sub-brand: "Kit Kat", "Extra") and the
+    // last word (often the flavour) are kept as long as possible.
+    rest = rest.filter((w) => w !== '&');
+    while (rest.length > 2 && !fits()) rest.splice(Math.floor(rest.length / 2), 1);
+    while (rest.length > 1 && !fits()) rest.pop();
+    core = [brand].concat(rest).join(' ');
     if (join(core).length <= max) return join(core);
 
-    // 2. abbreviations
-    ABBREV.forEach(([re, rep]) => { core = core.replace(re, rep); });
-    if (join(core).length <= max) return join(core);
-
-    // 3. drop a parent brand when a product brand follows
-    words = core.split(' ');
-    if (words.length > 2 && OWNER_BRANDS.indexOf(words[0]) !== -1) core = words.slice(1).join(' ');
-    if (join(core).length <= max) return join(core);
-
-    // 4. drop words from the end of the description, keep brand + size
-    words = core.split(' ');
-    while (words.length > 2 && join(words.join(' ')).length > max) words.splice(words.length - 1, 1);
-    core = words.join(' ');
-    if (join(core).length <= max) return join(core);
-
-    // 5. hard cut of the description, size always kept
+    // 6. hard cut, size always kept
     const room = Math.max(4, max - (sz ? sz.length + 1 : 0));
     return join(core.slice(0, room).trim());
+  }
+
+  // ---------- unit price (Australian style: per 100g / 100mL, per kg / L for big packs) ----------
+  function unitPrice(price, sizeText) {
+    const p = parseMoney(price);
+    const m = String(sizeText || '').match(/(\d+)\s?x\s?(\d+(?:\.\d+)?)\s?(g|kg|ml|l)\b|(\d+(?:\.\d+)?)\s?(g|kg|ml|l)\b/i);
+    if (!p || !m) return '';
+    let qty = m[1] ? Number(m[1]) * Number(m[2]) : Number(m[4]);
+    const unit = (m[3] || m[5]).toLowerCase();
+    if (!qty) return '';
+    if (unit === 'kg') qty *= 1000;
+    if (unit === 'l') qty *= 1000;
+    const weight = unit === 'g' || unit === 'kg';
+    if (qty >= 1000) return '$' + (p / qty * 1000).toFixed(2) + (weight ? ' per kg' : ' per L');
+    return '$' + (p / qty * 100).toFixed(2) + (weight ? ' per 100g' : ' per 100mL');
   }
 
   // ---------- categories ----------
@@ -364,7 +447,7 @@
   const api = {
     DEFAULT_SETTINGS, DEFAULT_CATEGORIES, round2, parseMoney, money, regularPrice,
     highestPrice, newItemPrice, checkExistingPrice, cleanBarcode, sameBarcode, validBarcode,
-    shortName, guessCategory, similarity, bestMatch, posScore, posMatch, searchWords, sizeOf, parseInputRows, normaliseSize,
+    shortName, setAbbreviations, squeeze, unitPrice, guessCategory, similarity, bestMatch, posScore, posMatch, searchWords, sizeOf, parseInputRows, normaliseSize,
   };
   root.CSB_RULES = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

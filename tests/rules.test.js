@@ -36,6 +36,15 @@ for (const [full, size] of [
   assert.ok(/\d+(g|ml|L|kg)$/.test(n), 'size kept: ' + n);
 }
 assert.strictEqual(R.shortName('A2 Full Cream 2L', '', 28), 'A2 Full Cream 2L');
+// brand (first word) never changes; shelf shorthand only when needed
+assert.ok(R.shortName('Continental Special Fried Rice Classic 120g', '', 28).startsWith('Continental '));
+assert.ok(/SPL|CLS/.test(R.shortName('Continental Special Fried Rice Classic 120g', '', 28)));
+assert.strictEqual(R.shortName('Continental Classic Rice 120g', '', 40), 'Continental Classic Rice 120g');
+R.setAbbreviations('Fried=FRD');
+assert.ok(R.shortName('Continental Special Fried Rice Classic 120g', '', 30).includes('FRD'));
+R.setAbbreviations('');
+assert.strictEqual(R.unitPrice(3.79, '60g'), '$6.32 per 100g');
+assert.strictEqual(R.unitPrice(7.5, '2L'), '$3.75 per L');
 
 // categories
 assert.strictEqual(R.guessCategory("Wrigley's Extra Peppermint Gum 64g"), 'Gum and Mints');
