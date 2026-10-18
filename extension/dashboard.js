@@ -10,7 +10,7 @@ const STORES = {
 
 let S = Object.assign({}, R.DEFAULT_SETTINGS, { selectors: {} });
 let categories = R.DEFAULT_CATEGORIES.slice();
-const state = { add: [], check: [], checkInput: [], catalogue: [], labels: [], tickets: [], tkOpts: {} };
+const state = { add: [], check: [], checkInput: [], catalogue: [], labels: [], tickets: [], tkOpts: {}, buy: [] };
 let busy = false;
 let stopRequested = false;
 
@@ -30,7 +30,7 @@ const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const m = (n) => (n === null || n === undefined || n === '' || isNaN(n) ? '' : '$' + Number(n).toFixed(2));
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 
 function log(msg, cls) {
   const li = document.createElement('li');
@@ -86,16 +86,16 @@ function pause(text) {
 
 // ---------------- persistence ----------------
 async function loadAll() {
-  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts', 'catalogueAt']);
+  const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts', 'catalogueAt', 'buy']);
   if (d.settings) S = Object.assign({}, S, d.settings);
   if (!S.namesV2) { if (S.nameMaxLength === 28) S.nameMaxLength = 60; S.namesV2 = true; chrome.storage.local.set({ settings: S }); }
   if (d.categories && d.categories.length) categories = d.categories;
-  ['add', 'check', 'checkInput', 'catalogue', 'tickets'].forEach((k) => { if (Array.isArray(d[k])) state[k] = d[k]; });
+  ['add', 'check', 'checkInput', 'catalogue', 'tickets', 'buy'].forEach((k) => { if (Array.isArray(d[k])) state[k] = d[k]; });
   if (d.tkOpts) state.tkOpts = d.tkOpts;
   state.catalogueAt = d.catalogueAt || 0;
 }
 function saveState() {
-  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts, catalogueAt: state.catalogueAt || 0 });
+  return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts, catalogueAt: state.catalogueAt || 0, buy: state.buy });
 }
 
 // ---------------- browser tabs ----------------
@@ -227,6 +227,85 @@ function writeSheet(rows, filename, sheetName) {
 }
 
 // All the detail we have about one supermarket result, as spreadsheet columns.
+// ---------------- "Which column is which?" ----------------
+const ROLE_NAMES = {
+  _: '–', barcode: 'Barcode', name: 'Name', hint: 'Supplier text (search help)', category: 'Category', price: 'Price',
+  qty: 'Quantity', cost: 'Paid per unit', costOuter: 'Paid per carton', units: 'Units per carton', was: 'Was price',
+};
+const ROLE_GUESS = [
+  ['barcode', /barcode|ean|upc|gtin|apn/],
+  ['costOuter', /(cost|price|paid|amount).*(outer|carton|case|ctn)|(outer|carton|case|ctn).*(cost|price)/],
+  ['units', /units?\s*(per|\/|in)\s*(outer|carton|case|ctn|pack)|^units$|pack\s*size|^upc$/],
+  ['cost', /unit\s*cost|cost\s*(ex|inc)?|^cost|paid|nett?\s*price|^net\b|buy\s*price|cost price/],
+  ['qty', /qty|quantity|shipped|ordered|^count$/],
+  ['hint', /supplier|invoice|description|desc\b|item description/],
+  ['category', /categ|department|dept/],
+  ['was', /^was|special/],
+  ['price', /price|rrp|sell/],
+  ['name', /name|product|item|title/],
+];
+function guessRoles(header, roles, sample) {
+  const used = new Set();
+  return header.map((h, i) => {
+    const t = String(h || '').toLowerCase();
+    for (const [role, re] of ROLE_GUESS) {
+      if (!roles.includes(role) || used.has(role)) continue;
+      if (re.test(t)) { used.add(role); return role; }
+    }
+    // no header text: a column of 8–14 digit codes is the barcode
+    if (!used.has('barcode') && roles.includes('barcode') && sample.length && sample.filter((r) => /^\d{8,14}$/.test(String(r[i] || '').replace(/\.0$/, ''))).length >= sample.length * 0.6) { used.add('barcode'); return 'barcode'; }
+    return '_';
+  });
+}
+
+let mapResolve = null;
+function mapColumns(fileName, rows, roles, hint) {
+  return new Promise((resolve) => {
+    rows = rows.filter((r) => r.some((c) => String(c).trim() !== ''));
+    if (!rows.length) { resolve(null); return; }
+    const width = Math.max(...rows.slice(0, 50).map((r) => r.length));
+    const first = rows[0].map((c) => String(c || '').trim());
+    const hasHeader = first.some((c) => c && !/^[\d.,$\s-]+$/.test(c));
+    const header = hasHeader ? first : Array.from({ length: width }, (_, i) => 'Column ' + String.fromCharCode(65 + (i % 26)));
+    const body = hasHeader ? rows.slice(1) : rows;
+    const sig = header.join('|').toLowerCase();
+    const saved = (S.colMaps || {})[sig];
+    let picks = saved && saved.length === width ? saved.slice() : guessRoles(header.concat(Array(width - header.length).fill('')), roles, body.slice(0, 20));
+    const opts = (sel) => ['_'].concat(roles).map((r) => '<option value="' + r + '"' + (r === sel ? ' selected' : '') + '>' + ROLE_NAMES[r] + '</option>').join('');
+    const draw = () => {
+      $('mapTable').innerHTML = '<thead><tr>' + Array.from({ length: width }, (_, i) =>
+        '<th><select data-c="' + i + '" class="' + (picks[i] === '_' ? 'none' : '') + '">' + opts(picks[i]) + '</select><span class="colname">' + esc(header[i] || '') + '</span></th>').join('') + '</tr></thead><tbody>' +
+        body.slice(0, 8).map((r) => '<tr>' + Array.from({ length: width }, (_, i) => '<td>' + esc(r[i] === undefined ? '' : r[i]) + '</td>').join('') + '</tr>').join('') + '</tbody>';
+    };
+    $('mapTitle').textContent = 'Which column is which? – ' + fileName;
+    $('mapHint').textContent = (hint || 'Pick what each column holds. Columns set to "–" are ignored.') + ' Showing the first rows of ' + body.length + '.';
+    $('mapCount').textContent = '';
+    draw();
+    $('mapModal').classList.remove('hidden');
+    $('mapTable').onchange = (e) => {
+      const c = +e.target.dataset.c;
+      // one column per role
+      picks = picks.map((p, i) => (i !== c && p === e.target.value && p !== '_' ? '_' : p));
+      picks[c] = e.target.value;
+      draw();
+    };
+    const done = (ok) => {
+      $('mapModal').classList.add('hidden');
+      if (!ok) { resolve(null); return; }
+      S.colMaps = Object.assign({}, S.colMaps || {}, { [sig]: picks });
+      chrome.storage.local.set({ settings: S });
+      const out = body.map((r) => {
+        const o = {};
+        picks.forEach((role, i) => { if (role !== '_') o[role] = r[i]; });
+        return o;
+      });
+      resolve(out);
+    };
+    $('mapOk').onclick = () => done(true);
+    $('mapSkip').onclick = () => done(false);
+  });
+}
+
 function storeCols(label, x) {
   const o = {};
   o[label + ' found'] = x ? (x.found ? 'yes' : (x.blocked ? 'blocked' : 'no')) : 'not checked';
@@ -384,16 +463,57 @@ $('addTable').addEventListener('click', (e) => {
 });
 
 $('addFile').addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  const rows = R.parseInputRows(await readSheet(f));
-  state.add = rows.map((x) => { const r = { barcode: x.barcode, inName: x.name, hint: x.hint, name: '', tname: '', category: x.category, overridePrice: x.price, price: x.price, status: 'waiting', use: true }; setNames(r, x.name, ''); return r; });
-  state.addFilter = 'all';
-  $('addFileInfo').textContent = f.name + ' — ' + rows.length + ' items';
-  log('Loaded ' + rows.length + ' barcodes from ' + f.name);
+  const files = Array.from(e.target.files || []);
   e.target.value = '';
+  if (!files.length) return;
+  const keep = $('addKeep').checked;
+  const list = keep ? state.add.slice() : [];
+  const seen = new Set(list.map((r) => r.barcode || (r.inName || '').toLowerCase()));
+  let added = 0;
+  for (const f of files) {
+    const mapped = await mapColumns(f.name, await readSheet(f), ['barcode', 'name', 'hint', 'category', 'price']);
+    if (!mapped) { log('Skipped ' + f.name); continue; }
+    let n = 0;
+    mapped.forEach((x) => {
+      const barcode = R.cleanBarcode(x.barcode);
+      const name = String(x.name || '').trim();
+      const hint = String(x.hint || '').trim();
+      if (!barcode && !name && !hint) return;
+      const key = barcode || (name || hint).toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      const price = R.parseMoney(x.price);
+      const r = { barcode, inName: name, hint, name: '', tname: '', category: String(x.category || '').trim(), overridePrice: price, price, status: 'waiting', use: true, file: f.name };
+      setNames(r, name, '');
+      list.push(r); n++;
+    });
+    added += n;
+    log('Loaded ' + n + ' items from ' + f.name);
+  }
+  state.add = list;
+  state.addFilter = 'all';
+  $('addFileInfo').textContent = files.length + ' file(s) — ' + state.add.length + ' items';
   renderAdd(); saveState();
-  if (rows.length) $('addLookup').click();          // straight on: PosPort check + Woolworths/Coles
+  if (added) $('addLookup').click();          // straight on: PosPort check + Woolworths/Coles
+});
+
+// Scanner box: a USB/Bluetooth scanner (or a phone app like "Barcode to PC") types the code + Enter
+function scanBox(id, onCode) {
+  $(id).addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const code = R.cleanBarcode($(id).value);
+    $(id).value = '';
+    if (code.length < 6) { if (code) log('"' + code + '" is too short for a barcode.', 'err'); return; }
+    onCode(code);
+  });
+}
+scanBox('addScan', (code) => {
+  if (state.add.some((r) => r.barcode && R.sameBarcode(r.barcode, code))) { log(code + ' is already in the list.'); return; }
+  state.add.unshift({ barcode: code, inName: '', hint: '', name: '', tname: '', category: '', price: null, status: 'waiting', use: true, file: 'scanned' });
+  renderAdd(); saveState();
+  log('Scanned ' + code);
+  if (!busy) $('addLookup').click();          // otherwise the running lookup picks it up
 });
 
 function applyMarkup(newMarkup) {
@@ -470,7 +590,9 @@ async function ensureCatalogue() {
   if (state.catalogue.length && age < 12) return true;
   const msg = state.catalogue.length ? 'Your PosPort item list was read ' + Math.round(age) + ' hours ago. Read it again so the bot knows exactly which items you already have? (about a minute)'
     : 'Read your PosPort item list first, so the bot can tell which items you already have? (about a minute)';
-  if (!confirm(msg)) return false;
+  if (state.catalogueDeclined && state.catalogue.length) return true;
+  if (state.catalogueDeclined) return false;
+  if (!confirm(msg)) { state.catalogueDeclined = true; return false; }
   await scanCatalogue();
   return state.catalogue.length > 0;
 }
@@ -485,9 +607,11 @@ $('addLookup').addEventListener('click', async () => {
     await ensureCatalogue();
     $('addScanInfo').textContent = state.catalogue.length ? 'Checked against ' + state.catalogue.length + ' PosPort items' : 'PosPort not checked';
     let n = 0;
-    for (const r of state.add) {
-      if (stopRequested) break;
-      if (r.status !== 'waiting' && r.status !== 'error' && r.status !== 'not found') continue;
+    const tried = new Set();
+    for (;;) {
+      const r = state.add.find((x) => ['waiting', 'error', 'not found'].includes(x.status) && !tried.has(x));
+      if (!r || stopRequested) break;
+      tried.add(r);
       n++;
       log('Looking up ' + (r.barcode || r.inName) + ' (' + n + ')');
       let res = await lookupPrices(r.barcode, r.inName || r.hint);
@@ -1467,9 +1591,16 @@ function ticketsFromSheet(rows) {
 }
 
 $('tkFile').addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
+  const files = Array.from(e.target.files || []);
   e.target.value = '';
+  for (const f of files) await loadTicketFile(f);
+});
+scanBox('tkScan', (code) => {
+  if (busy) { log('Busy – scan again in a moment.', 'err'); return; }
+  $('tkPaste').value = code;
+  $('tkAddLines').click();
+});
+async function loadTicketFile(f) {
   const res = ticketsFromSheet(await readSheet(f));
   if (res.error) { log(f.name + ': ' + res.error, 'err'); return; }
   let items = res.items;
@@ -1487,7 +1618,7 @@ $('tkFile').addEventListener('change', async (e) => {
   saveState(); renderTickets();
   const noPrice = items.filter((x) => !x.price).length;
   log('Loaded ' + items.length + ' items from ' + f.name + ' (' + (state.tickets.length - before) + ' new tickets)' + (noPrice ? ' – ' + noPrice + ' have no price, type it in the table.' : '.'), noPrice ? 'err' : 'ok');
-});
+}
 
 // A pasted line can be "Name | Price | Barcode", or only a barcode: then the bot finds the item
 // in PosPort (barcode → product name → matching PosPort item and its price).
@@ -1584,6 +1715,246 @@ $('tkPrint').addEventListener('click', () => {
   log('Sent ' + list.length + ' tickets to the printer.', 'ok');
 });
 
+
+// =====================================================================
+// 3. BUYING & INVOICES – is the supplier price good, or is it cheaper at Woolworths/Coles today?
+// =====================================================================
+state.buy = state.buy || [];
+const nowPrice = (x) => (x && x.found ? (x.now || x.regular) : null);
+
+function buyVerdict(r) {
+  const tol = (parseFloat($('buyTol').value) || 0) / 100;
+  const ww = nowPrice(r.ww), co = nowPrice(r.coles);
+  const best = [ww ? { store: 'Woolworths', p: ww } : null, co ? { store: 'Coles', p: co } : null].filter(Boolean).sort((a, b) => a.p - b.p)[0] || null;
+  r.best = best;
+  r.special = !!((r.ww && r.ww.found && r.ww.onSpecial && r.ww.now < r.ww.regular) || (r.coles && r.coles.found && r.coles.onSpecial && r.coles.now < r.coles.regular));
+  const unit = r.cost || (r.costOuter && r.units ? r.costOuter / r.units : null);
+  r.unitCost = unit ? R.round2(unit) : null;
+  if (!best) { r.verdict = 'no data'; r.vclass = 'warn'; r.vtext = 'No Woolworths/Coles price'; return; }
+  if (!unit) { r.verdict = 'list'; r.vclass = r.special ? 'ok' : ''; r.vtext = 'Cheapest: ' + best.store + ' ' + m(best.p) + (r.special ? ' (special)' : ''); return; }
+  const diff = unit - best.p;
+  if (diff > best.p * tol) { r.verdict = 'worse'; r.vclass = 'bad'; r.vtext = 'Cheaper at ' + best.store + ' by ' + m(diff) + ' each – return / buy there'; }
+  else if (diff >= -best.p * tol) { r.verdict = 'same'; r.vclass = 'warn'; r.vtext = 'About the same as ' + best.store; }
+  else { r.verdict = 'good'; r.vclass = 'ok'; r.vtext = Math.round(-diff / best.p * 100) + '% below ' + best.store; }
+}
+
+function renderBuy() {
+  const f = state.buyFilter || 'all';
+  const show = (r) => f === 'all' || (f === 'worse' && r.verdict === 'worse') || (f === 'special' && r.special) || (f === 'good' && r.verdict === 'good');
+  $('bAll').textContent = state.buy.length;
+  $('bWorse').textContent = state.buy.filter((r) => r.verdict === 'worse').length;
+  $('bSpecial').textContent = state.buy.filter((r) => r.special).length;
+  $('bGood').textContent = state.buy.filter((r) => r.verdict === 'good').length;
+  document.querySelectorAll('#buyFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === f));
+  $('buyTable').innerHTML = !state.buy.length ? '<tbody><tr><td class="muted">Load a shopping list or an invoice.</td></tr></tbody>' :
+    '<thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Paid / unit</th><th>Woolworths</th><th>Coles</th><th class="num">Cheapest now</th><th>Verdict</th><th class="num">PosPort sell</th><th class="num">Margin</th></tr></thead><tbody>' +
+    state.buy.map((r, i) => ({ r, i })).filter(({ r }) => show(r)).map(({ r, i }) => {
+      const margin = r.sell && r.unitCost ? Math.round((r.sell - r.unitCost) / r.sell * 100) + '%' : '';
+      return '<tr data-i="' + i + '"><td><b>' + esc(r.name || (r.ww && r.ww.found && r.ww.name) || '') + '</b><span class="sub">' + esc(r.barcode || '') + (r.file ? ' · ' + esc(r.file) : '') + '</span></td>' +
+        '<td class="num">' + esc(r.qty || '') + '</td>' +
+        '<td class="num"><input type="number" step="0.01" class="price buycost" value="' + (r.unitCost ? r.unitCost.toFixed(2) : '') + '" placeholder="–"></td>' +
+        '<td>' + storeCell(r.ww) + '</td><td>' + storeCell(r.coles) + '</td>' +
+        '<td class="num">' + (r.best ? m(r.best.p) + '<span class="sub">' + r.best.store + '</span>' : '') + '</td>' +
+        '<td><span class="verdict ' + (r.vclass || '') + '">' + esc(r.vtext || (r.ww ? '' : 'not checked yet')) + '</span>' + (r.special ? '<span class="sub special">on special now</span>' : '') + '</td>' +
+        '<td class="num">' + (r.sell ? m(r.sell) + '<span class="sub">' + esc(r.posName || '') + '</span>' : '') + '</td>' +
+        '<td class="num">' + margin + '</td></tr>';
+    }).join('') + '</tbody>';
+  // totals
+  const both = state.buy.filter((r) => r.unitCost && r.best);
+  const qty = (r) => Math.max(1, parseFloat(r.qty) || 1);
+  const paid = both.reduce((a, r) => a + r.unitCost * qty(r), 0);
+  const retail = both.reduce((a, r) => a + r.best.p * qty(r), 0);
+  const over = state.buy.filter((r) => r.verdict === 'worse').reduce((a, r) => a + (r.unitCost - r.best.p) * qty(r), 0);
+  $('buyTotals').innerHTML = both.length
+    ? 'Paid <b>' + m(paid) + '</b> for ' + both.length + ' items · same items at today\'s cheapest supermarket price: <b>' + m(retail) + '</b><br>' +
+      (over > 0 ? '<span class="verdict bad">' + m(over) + ' more than buying those at Woolworths/Coles today</span>' : '<span class="verdict ok">Nothing was cheaper at the supermarkets.</span>')
+    : state.buy.length ? state.buy.filter((r) => r.best).length + ' of ' + state.buy.length + ' priced. Add "Paid per unit" to compare an invoice.' : '–';
+  $('buyLookup').disabled = busy || !state.buy.length;
+  $('buyExport').disabled = !state.buy.some((r) => r.ww);
+  $('buyReturns').disabled = !state.buy.some((r) => r.verdict === 'worse');
+}
+
+$('buyFilter').addEventListener('click', (e) => { const b = e.target.closest('button[data-f]'); if (b) { state.buyFilter = b.dataset.f; renderBuy(); } });
+$('buyTol').addEventListener('input', () => { state.buy.forEach(buyVerdict); renderBuy(); });
+$('buyTable').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('buycost')) return;
+  const r = state.buy[+e.target.closest('tr').dataset.i];
+  r.cost = R.parseMoney(e.target.value); r.costOuter = null;
+  buyVerdict(r); renderBuy(); saveState();
+});
+$('buyClear').addEventListener('click', () => { state.buy = []; renderBuy(); saveState(); });
+
+$('buyFile').addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  for (const f of files) {
+    const mapped = await mapColumns(f.name, await readSheet(f), ['barcode', 'name', 'qty', 'cost', 'costOuter', 'units'],
+      'Invoice: pick the barcode (or name), quantity and what you paid. Shopping list: barcode or name is enough.');
+    if (!mapped) continue;
+    let n = 0;
+    mapped.forEach((x) => {
+      const barcode = R.cleanBarcode(x.barcode), name = String(x.name || '').trim();
+      if (!barcode && !name) return;
+      state.buy.push({ barcode, name, qty: R.parseMoney(x.qty) || '', cost: R.parseMoney(x.cost), costOuter: R.parseMoney(x.costOuter), units: R.parseMoney(x.units), file: f.name });
+      n++;
+    });
+    log('Loaded ' + n + ' lines from ' + f.name);
+  }
+  $('buyInfo').textContent = state.buy.length + ' lines';
+  renderBuy(); saveState();
+  if (state.buy.length && confirm('Compare ' + state.buy.length + ' items with Woolworths and Coles now?')) $('buyLookup').click();
+});
+scanBox('buyScan', (code) => {
+  state.buy.unshift({ barcode: code, name: '', qty: 1, file: 'scanned' });
+  renderBuy(); saveState();
+  if (!busy) $('buyLookup').click();
+});
+
+$('buyLookup').addEventListener('click', async () => {
+  setBusy(true);
+  try {
+    for (;;) {
+      const r = state.buy.find((x) => !x.ww && !x.tried);
+      if (!r || stopRequested) break;
+      r.tried = true;
+      log('Comparing ' + (r.name || r.barcode));
+      const res = await lookupPrices(r.barcode, r.name);
+      r.ww = res.ww; r.coles = res.coles;
+      if (!r.name) { const src = (res.ww && res.ww.found && res.ww) || (res.coles && res.coles.found && res.coles); if (src) r.name = src.name; }
+      // our sell price in PosPort
+      const c = (r.barcode && state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, r.barcode))) ||
+        (r.name && state.catalogue.length ? (() => { const mm = R.posMatch(r.name, state.catalogue, (x) => x.name); return mm.sure ? mm.item : null; })() : null);
+      if (c) { r.sell = c.price; r.posName = c.name; }
+      buyVerdict(r); renderBuy(); saveState();
+    }
+    state.buy.forEach((r) => { delete r.tried; });
+    log('Comparison finished.', 'ok');
+  } finally { setBusy(false); renderBuy(); }
+});
+
+function buyRows(list) {
+  return list.map((r) => Object.assign({
+    Item: r.name || '', Barcode: r.barcode || '', Qty: r.qty || '', 'Paid per unit $': r.unitCost || '',
+    'Cheapest now $': r.best ? r.best.p : '', 'Cheapest at': r.best ? r.best.store : '',
+    'Difference per unit $': r.unitCost && r.best ? R.round2(r.unitCost - r.best.p) : '',
+    'Difference total $': r.unitCost && r.best ? R.round2((r.unitCost - r.best.p) * Math.max(1, parseFloat(r.qty) || 1)) : '',
+    Verdict: r.vtext || '', 'On special': r.special ? 'yes' : '',
+    'PosPort sell $': r.sell || '', 'Margin %': r.sell && r.unitCost ? Math.round((r.sell - r.unitCost) / r.sell * 100) : '',
+    File: r.file || '',
+  }, storeCols('Woolworths', r.ww), storeCols('Coles', r.coles)));
+}
+$('buyExport').addEventListener('click', () => writeSheet(buyRows(state.buy), 'buying-compare-' + today() + '.xlsx', 'Compare'));
+$('buyReturns').addEventListener('click', () => writeSheet(buyRows(state.buy.filter((r) => r.verdict === 'worse')), 'return-or-buy-elsewhere-' + today() + '.xlsx', 'Cheaper elsewhere'));
+
+// =====================================================================
+// BACKUP – everything the Back Office shows, for safe keeping or moving to another system
+// =====================================================================
+function bkLog(msg, cls) { const li = document.createElement('li'); li.textContent = new Date().toLocaleTimeString() + '  ' + msg; if (cls) li.className = cls; $('bkLog').prepend(li); }
+
+async function execMain(tabId, func) {
+  try { const [r] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func }); return r ? r.result : null; } catch (e) { return null; }
+}
+
+// turn nested JSON into flat rows: {a:{b:1}} -> {"a.b":1}
+function flatten(o, prefix, out) {
+  out = out || {};
+  Object.keys(o || {}).forEach((k) => {
+    const v = o[k], key = prefix ? prefix + '.' + k : k;
+    if (v && typeof v === 'object' && !Array.isArray(v)) flatten(v, key, out);
+    else if (Array.isArray(v)) out[key] = v.every((x) => x === null || typeof x !== 'object') ? v.join(' | ') : JSON.stringify(v).slice(0, 32000);
+    else out[key] = v;
+  });
+  return out;
+}
+function recordArrays(data) {
+  const found = [];
+  const walk = (n, path, depth) => {
+    if (!n || depth > 5) return;
+    if (Array.isArray(n)) { if (n.length && n.every((x) => x && typeof x === 'object' && !Array.isArray(x))) found.push({ path, rows: n }); return; }
+    if (typeof n === 'object') Object.keys(n).forEach((k) => walk(n[k], path ? path + '.' + k : k, depth + 1));
+  };
+  walk(data, '', 0);
+  if (!found.length && data && typeof data === 'object' && !Array.isArray(data)) found.push({ path: '', rows: [data] });
+  return found;
+}
+
+async function runBackup(onlyItems) {
+  setBusy(true);
+  $('bkLog').innerHTML = '';
+  const pages = [], api = {};
+  try {
+    if (!(await posGo('/catalog/items', 'items'))) { bkLog('Could not open the Back Office – are you logged in?', 'err'); return; }
+    const tabId = await posTab();
+    let links = [{ path: '/catalog/items', text: 'Items' }];
+    if (!onlyItems) {
+      const ml = await pos('menuLinks');
+      const extra = ['/catalog/categories', '/catalog/modifiers', '/catalog/variants', '/catalog/units'];
+      const all = ((ml && ml.links) || []).concat(extra.map((p) => ({ path: p, text: p.split('/').pop() })));
+      const seen = new Set();
+      links = all.filter((l) => { if (seen.has(l.path)) return false; seen.add(l.path); return true; }).slice(0, 60);
+      if (!links.some((l) => l.path === '/catalog/items')) links.unshift({ path: '/catalog/items', text: 'Items' });
+    }
+    bkLog(links.length + ' sections to read.');
+    for (const l of links) {
+      if (stopRequested) break;
+      await chrome.tabs.update(tabId, { url: POS + l.path });
+      await sleep(500); await waitComplete(tabId); await sleep(2500);
+      const info = await pos('pageInfo');
+      if (info && info.page === 'login') { bkLog('Logged out – log in again and restart the backup.', 'err'); break; }
+      const rows = []; let headers = [];
+      for (let pg = 1; pg <= 300; pg++) {
+        const t = await pos('readTable');
+        (t && t.tables || []).forEach((tb) => { if (tb.headers.length > headers.length) headers = tb.headers; rows.push(...tb.rows); });
+        const nx = await pos('nextPage', S.delayMs);
+        if (!nx || !nx.ok) break;
+      }
+      const raw = await execMain(tabId, () => (window.__csbRaw ? Object.values(window.__csbRaw.items) : []));
+      (raw || []).forEach((x) => { api[x.url] = x.data; });
+      pages.push({ section: l.text || l.path, path: l.path, headers, rows });
+      bkLog((l.text || l.path) + ': ' + rows.length + ' table rows, ' + (raw || []).length + ' data answers');
+    }
+    // ---- Excel: one sheet per section, one per data list ----
+    const wb = XLSX.utils.book_new();
+    const names = new Set();
+    const sheetName = (n) => {
+      let b = String(n || 'Sheet').replace(/[\[\]:*?\/\\]/g, ' ').trim().slice(0, 28) || 'Sheet';
+      let k = b, i = 2; while (names.has(k.toLowerCase())) k = b.slice(0, 26) + ' ' + i++;
+      names.add(k.toLowerCase()); return k;
+    };
+    const summary = [];
+    pages.forEach((p) => {
+      if (!p.rows.length) return;
+      const aoa = [p.headers.length ? p.headers : p.rows[0].map((_, i) => 'Column ' + (i + 1))].concat(p.rows.map((r) => r.map((c) => String(c).slice(0, 32000))));
+      const nm = sheetName(p.section);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), nm);
+      summary.push({ Sheet: nm, From: 'page ' + p.path, Rows: p.rows.length });
+    });
+    Object.keys(api).forEach((url) => {
+      recordArrays(api[url]).forEach((arr) => {
+        if (arr.rows.length < 1) return;
+        const flat = arr.rows.map((r) => { const f = flatten(r); Object.keys(f).forEach((k) => { if (typeof f[k] === 'string') f[k] = f[k].slice(0, 32000); }); return f; });
+        const nm = sheetName('data ' + url.split('?')[0].split('/').filter(Boolean).slice(-2).join(' ') + (arr.path ? ' ' + arr.path.split('.').pop() : ''));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat), nm);
+        summary.push({ Sheet: nm, From: 'data ' + url + (arr.path ? ' → ' + arr.path : ''), Rows: flat.length });
+      });
+    });
+    const ws = XLSX.utils.json_to_sheet(summary.length ? summary : [{ Sheet: '-', From: 'nothing found', Rows: 0 }]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Contents');
+    wb.SheetNames.unshift(wb.SheetNames.pop());           // Contents first
+    const d0 = new Date(), pad = (x) => String(x).padStart(2, '0');
+    const stamp = d0.getFullYear() + '-' + pad(d0.getMonth() + 1) + '-' + pad(d0.getDate()) + '-' + pad(d0.getHours()) + pad(d0.getMinutes());
+    XLSX.writeFile(wb, 'posport-backup-' + stamp + '.xlsx');
+    // ---- JSON: everything, for importing into another system ----
+    const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), source: POS, pages, data: api }, null, 1)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'posport-backup-' + stamp + '.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    bkLog('Backup saved: ' + summary.length + ' sheets in the Excel file + the full JSON file (check your Downloads).', 'ok');
+  } finally { setBusy(false); }
+}
+$('bkRun').addEventListener('click', () => { if (confirm('Read every Back Office section and save a backup? This takes a few minutes – leave the PosPort tab alone while it runs.')) runBackup(false); });
+$('bkItems').addEventListener('click', () => runBackup(true));
+
 // =====================================================================
 // SETTINGS
 // =====================================================================
@@ -1664,6 +2035,6 @@ function refreshButtons() {
   if (state.catalogue.length) $('chkScanInfo').textContent = state.catalogue.length + ' items from last scan';
   if (state.checkInput.length) $('chkFileInfo').textContent = state.checkInput.length + ' items loaded';
   renderAdd(); renderCheck(); refreshButtons();
-  loadTkOpts(); renderTickets();
+  loadTkOpts(); renderTickets(); renderBuy();
   log('Ready. Keep PosPort Back Office logged in, in this Chrome window.');
 })();

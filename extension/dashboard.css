@@ -173,3 +173,15 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
 .maybe { background: var(--warn-soft); border-radius: 6px; padding: 4px 6px; margin-top: 4px; font-size: 12px; }
 .maybe button { margin: 2px 2px 0 0; }
 tr.in-pos td { background: #fafcff; }
+
+.scanbox { width: 100%; font: inherit; padding: 6px 8px; border: 1px dashed var(--accent); border-radius: 8px; margin-top: 8px; }
+.scanbox:focus { outline: 2px solid var(--accent-soft); border-style: solid; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal-box { background: var(--card); border-radius: 12px; padding: 16px 18px; max-width: 1100px; width: 100%; max-height: 90vh; overflow: auto; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+.modal-box h3 { margin: 0 0 4px; }
+.map-wrap { max-height: 50vh; margin: 10px 0; }
+#mapTable th select { font: inherit; font-weight: 600; padding: 3px 4px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent); background: var(--accent-soft); }
+#mapTable th select.none { border-color: var(--line); color: var(--muted); background: #fff; font-weight: 400; }
+#mapTable th .colname { display: block; font-weight: 400; color: var(--muted); margin-top: 3px; font-size: 12px; }
+.verdict { font-weight: 600; }
+.verdict.bad { color: var(--bad); } .verdict.ok { color: var(--ok); } .verdict.warn { color: var(--warn); }

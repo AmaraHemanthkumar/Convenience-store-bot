@@ -92,9 +92,18 @@
     if (!text || (text[0] !== '{' && text[0] !== '[')) return;
     if (/\.(js|css|png|svg)(\?|$)/.test(url)) return;
     try {
+      const data = JSON.parse(text);
       const out = [];
-      collect(JSON.parse(text), out, 0);
+      collect(data, out, 0);
       save(out);
+      // Keep the raw answers in memory (this page only) for "Back up all Back Office data".
+      // Nothing is sent anywhere; the bot reads this when you ask for a backup.
+      const raw = (window.__csbRaw = window.__csbRaw || { size: 0, items: {} });
+      if (raw.size + text.length < 60e6) {
+        const key = String(url).replace(/^https?:\/\/[^/]+/, '');
+        if (!raw.items[key]) raw.size += text.length;
+        raw.items[key] = { url: key, at: Date.now(), data };
+      }
     } catch (e) { /* not JSON */ }
   }
 

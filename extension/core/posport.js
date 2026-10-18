@@ -455,6 +455,45 @@
     return { ok: true, old, message: msg || 'saved (no message shown)' };
   }
 
+  // ---------- backup helpers ----------
+  // Links in the Back Office menu (same site only, never log-out).
+  function menuLinks() {
+    const seen = new Set();
+    const out = [];
+    Array.from(document.querySelectorAll('nav a[href], aside a[href], a[href]')).forEach((a) => {
+      let u;
+      try { u = new URL(a.getAttribute('href'), location.href); } catch (e) { return; }
+      if (u.origin !== location.origin) return;
+      const path = u.pathname.replace(/\/+$/, '') || '/';
+      if (/log-?out|sign-?out|logout|delete|remove|print|export|download|new$|create|add$|bulk/i.test(path)) return;
+      if (/\/[0-9a-f]{8}-[0-9a-f]{4}-|\/\d{3,}$/i.test(path)) return;      // single records, not lists
+      if (seen.has(path)) return;
+      seen.add(path);
+      out.push({ path, text: norm(a.textContent).slice(0, 60) });
+    });
+    return { ok: true, links: out };
+  }
+
+  // Any table on the page: headers + rows of text.
+  function readTable() {
+    const tables = Array.from(document.querySelectorAll('table, [role="table"], [role="grid"]')).filter(visible);
+    const out = [];
+    tables.forEach((t) => {
+      const heads = Array.from(t.querySelectorAll('thead th, [role="columnheader"]')).map((h) => norm(h.textContent));
+      const rows = Array.from(t.querySelectorAll('tbody tr, [role="row"]')).filter((r) => !r.querySelector('th') && visible(r))
+        .map((r) => Array.from(r.querySelectorAll('td, [role="cell"], [role="gridcell"]')).map((c) => {
+          const inp = c.querySelector('input:not([type=checkbox]),select,textarea');
+          const sw = c.querySelector('[role="switch"],button[aria-checked],input[type=checkbox]');
+          if (inp) return norm(inp.value);
+          if (sw && !norm(c.textContent)) return (sw.checked || sw.getAttribute('aria-checked') === 'true' || sw.getAttribute('data-state') === 'checked') ? 'on' : 'off';
+          return norm(c.textContent);
+        }))
+        .filter((cells) => cells.some((x) => x));
+      if (rows.length) out.push({ headers: heads, rows });
+    });
+    return { ok: true, tables: out, title: norm((document.querySelector('h1,h2') || {}).textContent || document.title) };
+  }
+
   // ---------- captured catalogue ----------
   function captured() {
     try { return { ok: true, items: Object.values(JSON.parse(localStorage.getItem('__csb_items') || '{}')) }; } catch (e) {
@@ -470,6 +509,6 @@
   root.CSB_POSPORT = {
     SEL, applyOverrides, pageInfo, bulkStatus, ensureRows, fillBulkRow, bulkGetCategories, clickCreate, cancelBulk,
     readListRows, searchList, tickRow, clickPrintLabels, nextPage, openItem, readEditPrice, setEditPrice,
-    captured, clearCaptured, toasts,
+    captured, clearCaptured, toasts, menuLinks, readTable,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

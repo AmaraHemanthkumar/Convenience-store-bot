@@ -5,6 +5,7 @@ import json
 import pathlib
 import tempfile
 from playwright.sync_api import sync_playwright
+from openpyxl import load_workbook
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXT = str(ROOT / "extension")
@@ -79,7 +80,10 @@ def main():
         wb = Workbook(); ws = wb.active
         ws.append(["Barcode"]); ws.append(["9300605094703"]); ws.append(["9300682012345"])
         xl = pathlib.Path(tempfile.mkdtemp()) / "barcodes.xlsx"; wb.save(xl)
-        page.set_input_files("#addFile", str(xl))          # confirm "read PosPort list?" auto-accepted
+        page.set_input_files("#addFile", str(xl))
+        page.wait_for_selector("#mapModal:not(.hidden)")      # "Which column is which?"
+        assert page.locator("#mapTable th select").first.input_value() == "barcode"
+        page.click("#mapOk")                                  # confirm "read PosPort list?" auto-accepted
         wait_until(page, lambda: "Done:" in page.inner_text("#log"))
         print("summary:", page.inner_text("#addSummary"))
         assert page.inner_text("#fNew") == "1" and page.inner_text("#fPos") == "1", (page.inner_text("#fNew"), page.inner_text("#fPos"))
@@ -134,7 +138,6 @@ def main():
         assert "✓ 9300682012345 → ALLENS MINTIES 150G" in page.inner_text("#lblLog")  # barcode -> Woolworths name -> keyword search
 
         # "Download failed items" on Labels and Add tabs
-        from openpyxl import load_workbook
         with page.expect_download() as dl:
             page.click("#lblFailed")
         ws = load_workbook(save_xlsx(dl.value)).active
@@ -198,6 +201,43 @@ def main():
         box = PdfReader(str(pdf)).pages[0].mediabox
         assert (round(float(box.width) / 72, 2), round(float(box.height) / 72, 2)) == (2.5, 1.0), box
         page.click("[data-tab=tickets]"); page.evaluate("document.getElementById('lblBox').open = true")
+        # 3 · Buying & invoices: invoice paid per carton -> per unit, compared with today's supermarket price
+        wb = Workbook(); ws = wb.active
+        ws.append(["Item Description", "Qty Shipped", "Barcode", "Cost per Outer", "Units per Outer"])
+        ws.append(["NES KIT KAT CHUNKY KING 70G", 1, "9300605094703", 48.0, 24])     # $2.00 each vs Woolies $2.50
+        ws.append(["ALLENS MINTIES 150G", 2, "9300682012345", 60.0, 12])             # $5.00 each vs Woolies special $3.00
+        inv = pathlib.Path(tempfile.mkdtemp()) / "invoice.xlsx"; wb.save(inv)
+        page.click("[data-tab=buy]")
+        page.set_input_files("#buyFile", str(inv))
+        page.wait_for_selector("#mapModal:not(.hidden)")
+        roles = [page.locator("#mapTable th select").nth(i).input_value() for i in range(5)]
+        print("invoice columns guessed:", roles)
+        assert roles[1:] == ["qty", "barcode", "costOuter", "units"], roles
+        page.locator("#mapTable th select").nth(0).select_option("name")
+        page.click("#mapOk")
+        wait_until(page, lambda: "Comparison finished" in page.inner_text("#log"))
+        txt = page.inner_text("#buyTable")
+        print("buy totals:", page.inner_text("#buyTotals").replace("\n", " "))
+        assert "Cheaper at Woolworths by $2.00 each" in txt and "% below Woolworths" in txt, txt
+        assert page.inner_text("#bWorse") == "1"
+        with page.expect_download() as dl:
+            page.click("#buyReturns")
+        ws2 = load_workbook(save_xlsx(dl.value)).active
+        assert ws2.max_row == 2 and ws2.cell(2, 1).value.startswith("ALLENS"), [c.value for c in ws2[2]][:3]
+
+        # Backup (items only on the mock): Excel with a Contents sheet + a JSON file
+        page.click("[data-tab=backup]")
+        downloads = []
+        page.on("download", lambda d: downloads.append(d))
+        page.click("#bkItems")
+        wait_until(page, lambda: "Backup saved" in page.inner_text("#bkLog"))
+        page.wait_for_timeout(500)
+        names = sorted(d.suggested_filename.rsplit(".", 1)[1] for d in downloads)
+        print("backup files:", [d.suggested_filename for d in downloads], page.inner_text("#bkLog").split("\n")[0])
+        assert names == ["json", "xlsx"], names
+        bk = load_workbook(save_xlsx([d for d in downloads if d.suggested_filename.endswith(".xlsx")][0]))
+        assert bk.sheetnames[0] == "Contents" and any(n.startswith("Items") for n in bk.sheetnames), bk.sheetnames
+
         page.click("[data-tab=check]")
         # Price check: scan the mock list, then compare a name-only sheet
         page.click("[data-tab=check]")

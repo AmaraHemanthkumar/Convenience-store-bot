@@ -12,7 +12,9 @@
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="add" role="tab">1 · Items &amp; prices</button>
       <button class="tab" data-tab="tickets" role="tab">2 · Tickets &amp; labels</button>
+      <button class="tab" data-tab="buy" role="tab">3 · Buying &amp; invoices</button>
       <button class="tab" data-tab="check" role="tab">Whole-shop price check</button>
+      <button class="tab" data-tab="backup" role="tab">Backup</button>
       <button class="tab" data-tab="settings" role="tab">Settings</button>
     </nav>
   </header>
@@ -29,10 +31,12 @@
       <div class="steps">
         <div class="step">
           <h3>1. Load barcodes</h3>
-          <p>Excel or CSV with a <b>Barcode</b> column (Name, Category, Price optional). The bot then looks up Woolworths &amp; Coles and checks which items you already have in PosPort.</p>
-          <label class="btn file primary">Choose Excel file<input type="file" id="addFile" accept=".xlsx,.xls,.csv"></label>
+          <p>One or more Excel/CSV files – you choose which column is the barcode, name, price… The bot then looks up Woolworths &amp; Coles and checks which items you already have in PosPort.</p>
+          <label class="btn file primary">Choose Excel files<input type="file" id="addFile" accept=".xlsx,.xls,.csv" multiple></label>
+          <label class="check small-note"><input type="checkbox" id="addKeep"> add to the list (don't replace)</label>
           <span id="addFileInfo" class="muted"></span>
           <div class="row">
+            <input type="text" id="addScan" class="scanbox" placeholder="Scan / type a barcode + Enter" autocomplete="off">
             <button id="addLookup" class="btn small" disabled>Look up again</button>
             <span id="addScanInfo" class="muted small-note"></span>
           </div>
@@ -73,6 +77,64 @@
         <button id="addToTickets" class="btn small" disabled>Make tickets</button>
       </div>
       <div class="tablewrap"><table id="addTable" class="grid"></table></div>
+    </section>
+
+    <!-- ================= BUYING & INVOICES ================= -->
+    <section id="tab-buy" class="panel hidden">
+      <div class="steps">
+        <div class="step">
+          <h3>1. Shopping list or invoice</h3>
+          <p>Excel/CSV files (several at once). Pick the columns: barcode or name, quantity, and – for an invoice – what you paid (per unit, or per carton + units per carton).</p>
+          <label class="btn file primary">Choose files<input type="file" id="buyFile" accept=".xlsx,.xls,.csv" multiple></label>
+          <input type="text" id="buyScan" class="scanbox" placeholder="Scan / type a barcode + Enter" autocomplete="off">
+          <span id="buyInfo" class="muted small-note"></span>
+        </div>
+        <div class="step">
+          <h3>2. Compare</h3>
+          <p>Checks today's Woolworths and Coles price <b>including specials</b> (what you would pay if you bought it there), and your PosPort sell price.</p>
+          <div class="row">
+            <button id="buyLookup" class="btn primary" disabled>Compare prices</button>
+            <label class="inline small-note">"About the same" within <input type="number" id="buyTol" value="5" min="0" max="50" class="small-num">%</label>
+          </div>
+        </div>
+        <div class="step">
+          <h3>3. Decide</h3>
+          <p id="buyTotals" class="muted">–</p>
+          <div class="row">
+            <button id="buyExport" class="btn small" disabled>Download Excel</button>
+            <button id="buyReturns" class="btn small" disabled>Download "return / buy elsewhere" list</button>
+            <button id="buyClear" class="btn small">Clear</button>
+          </div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="seg" id="buyFilter">
+          <button data-f="all" class="on">All <span id="bAll"></span></button>
+          <button data-f="worse">Cheaper elsewhere <span id="bWorse"></span></button>
+          <button data-f="special">On special now <span id="bSpecial"></span></button>
+          <button data-f="good">Good deal <span id="bGood"></span></button>
+        </div>
+      </div>
+      <div class="tablewrap"><table id="buyTable" class="grid"></table></div>
+    </section>
+
+    <!-- ================= BACKUP ================= -->
+    <section id="tab-backup" class="panel hidden">
+      <div class="steps two">
+        <div class="step">
+          <h3>Back up all Back Office data</h3>
+          <p>The bot opens every page in the Back Office menu (catalog, categories, modifiers, customers, inventory, settings…), goes through all their pages, and saves everything it sees – plus the full data the Back Office loads behind the scenes.</p>
+          <p>You get <b>one Excel file</b> (a sheet per section) and <b>one JSON file</b> with every record and field – the format another POS system or a developer can import. It only reads; it never changes anything.</p>
+          <div class="row">
+            <button id="bkRun" class="btn primary">Back up everything</button>
+            <button id="bkItems" class="btn">Items only (quick)</button>
+          </div>
+        </div>
+        <div class="step">
+          <h3>Progress</h3>
+          <ul id="bkLog" class="log"></ul>
+        </div>
+      </div>
     </section>
 
     <!-- ================= CHECK ================= -->
@@ -120,9 +182,10 @@
             <button id="tkFromLabels" class="btn small hidden">From Labels list</button>
           </div>
           <div class="row">
-            <label class="btn small file primary-outline">Load Excel / CSV<input type="file" id="tkFile" accept=".xlsx,.xls,.csv"></label>
+            <label class="btn small file primary-outline">Load Excel / CSV<input type="file" id="tkFile" accept=".xlsx,.xls,.csv" multiple></label>
             <span class="muted small-note">e.g. the saved price-check Excel</span>
           </div>
+          <input type="text" id="tkScan" class="scanbox" placeholder="Scan / type a barcode + Enter" autocomplete="off">
           <textarea id="tkPaste" rows="3" placeholder="Allens Minties 150g | 5.70 | 9300682012345&#10;9300605094703"></textarea>
           <div class="row"><button id="tkAddLines" class="btn small">Add these lines</button><button id="tkClear" class="btn small">Clear all</button></div>
         </div>
@@ -212,6 +275,18 @@
     </section>
   </main>
 
+  <div id="mapModal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="mapTitle">Which column is which?</h3>
+      <p class="muted" id="mapHint">Pick what each column holds. Columns set to "–" are ignored.</p>
+      <div class="tablewrap map-wrap"><table id="mapTable" class="grid"></table></div>
+      <div class="row">
+        <button id="mapOk" class="btn primary">Use these columns</button>
+        <button id="mapSkip" class="btn">Skip this file</button>
+        <span id="mapCount" class="muted"></span>
+      </div>
+    </div>
+  </div>
   <div id="printArea"></div>
   <style id="pageStyle"></style>
   <footer><ul id="log" class="log"></ul></footer>

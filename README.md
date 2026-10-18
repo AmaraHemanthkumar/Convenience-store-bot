@@ -30,7 +30,7 @@ After you download a newer version, press the ↻ reload button on the extension
 Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths, Coles and PosPort in their own tabs and works in them, so leave those tabs open while it runs.
 
 ### 1 · Items & prices (new items and price checks in one go)
-1. **Choose Excel file** with a `Barcode` column (Name, Category, Price optional). The bot then works through the list by itself:
+1. **Choose Excel files** (one or several at once, or scan barcodes into the scan box). For each file, a **"Which column is which?"** window shows the first rows with a drop-down above each column. Set them to Barcode, Name, Supplier text, Category, Price, or "–" to ignore. The bot remembers your choice for files with the same layout. Then it works through the list by itself:
    - It reads your PosPort item list, if it hasn't in the last 12 hours.
    - It looks up Woolworths and Coles normal prices, falling back to the free barcode databases when neither shop knows the barcode.
    - It sorts every barcode into one of two groups:
@@ -44,6 +44,33 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
 4. Created items and changed prices go onto the **print list** in *Tickets & labels* automatically (you can switch this off in Settings).
 
 **Download Excel** saves the full comparison, and **Download failed items** saves everything that needs a hand-check.
+
+### 3 · Buying & invoices
+Is what you paid a good price, or would it be cheaper at Woolworths or Coles today (specials included)?
+- **Load:** an invoice or a shopping list (several files at once), or scan barcodes.
+- **Pick columns:**
+  - an invoice needs barcode (or name), quantity, and paid per unit, or paid per carton plus units per carton;
+  - a shopping list only needs a barcode or name.
+- **Each line shows:**
+  - Woolworths and Coles today (normal price and special);
+  - the cheapest price and where it is;
+  - a verdict: **Cheaper at Woolworths by $x – return / buy there**, **About the same** (tolerance adjustable), or **x% below**;
+  - your PosPort sell price and margin.
+- **Totals:** what you paid vs the same items at today's cheapest supermarket price, and how much more you paid on the "cheaper elsewhere" items.
+- **Filters:** Cheaper elsewhere · On special now (good time to stock up) · Good deal.
+- **Downloads:** **Download Excel** saves the full comparison. **Download "return / buy elsewhere" list** saves only the problem lines.
+
+### Scanning barcodes straight in
+Every tab has a **scan box**. Click it and scan: each barcode + Enter is added and looked up straight away.
+- **USB / Bluetooth scanners** work like a keyboard, so nothing needs installing.
+- **To scan with a phone:** a phone app such as *Barcode to PC* (free) sends each scan to the laptop as if typed. Put the cursor in the scan box and scan with the phone.
+
+### Backup
+**Back up everything** opens every page in the Back Office menu (catalog, categories, modifiers, variants, units, customers, inventory, settings…). It reads all of their pages and saves two files:
+- **posport-backup-DATE.xlsx:** a *Contents* sheet, one sheet per section, and one sheet per data list the Back Office loads, with every field.
+- **posport-backup-DATE.json:** every record exactly as PosPort sends it, which another POS system or a developer can import.
+
+It only reads. **Items only (quick)** backs up just the item list.
 
 ### Whole-shop price check
 1. **Scan PosPort items** goes through Catalog › Items page by page. Tip: set *Rows per page* to the largest number first, so there are fewer pages.
