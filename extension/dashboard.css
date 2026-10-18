@@ -133,3 +133,25 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
   #printArea.a4 .ticket { outline: 0.5px dashed #888; outline-offset: -0.25px; break-inside: avoid; }
   #printArea.a4 .ticket.bordered { outline: 1px solid #000; }
 }
+
+.tname-row { display: flex; align-items: center; gap: 4px; margin-top: 3px; font-size: 12px; }
+.grid input.tname { width: 200px; font-size: 12px; padding: 2px 5px; }
+
+/* PosPort style: name, price under it on the left (size/unit price beside it), barcode centred at the bottom */
+.t-meta-side { display: none; }
+.ticket.layout-posport { grid-template-columns: auto 1fr; grid-template-rows: auto auto 1fr; grid-template-areas: "name name" "price side" "info info"; }
+.ticket.layout-posport .t-name { font-weight: 600; }
+.ticket.layout-posport .t-price { align-self: center; justify-self: start; font-weight: 700; line-height: 1; }
+.ticket.layout-posport .t-price .cur { font-size: 1em; margin: 0; }
+.ticket.layout-posport .t-price .cts { font-size: 1em; margin: 0; }
+.ticket.layout-posport .t-meta-side { display: block; grid-area: side; align-self: center; justify-self: end; text-align: right; white-space: normal; }
+.ticket.layout-posport .t-info .t-meta { display: none; }
+.ticket.layout-posport .t-info { align-items: center; text-align: center; justify-content: flex-end; }
+.ticket.layout-posport .t-bc { margin: 0 auto; height: calc(var(--th) * 0.22); max-width: 1.3in; }
+
+/* Compact: one line name + price, small details below */
+.ticket.layout-compact { grid-template-columns: 1fr auto; grid-template-rows: 1fr auto; grid-template-areas: "name price" "info info"; align-items: center; }
+.ticket.layout-compact .t-name { -webkit-line-clamp: 3; max-height: 3.3em; }
+.ticket.layout-compact .t-price { align-self: center; }
+.ticket.layout-compact .t-info { flex-direction: row; align-items: flex-end; gap: 0.08in; justify-content: space-between; }
+.ticket.layout-compact .t-bc { width: 1.1in; height: calc(var(--th) * 0.2); }

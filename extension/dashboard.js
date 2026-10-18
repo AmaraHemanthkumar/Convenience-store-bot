@@ -14,6 +14,17 @@ const state = { add: [], check: [], checkInput: [], catalogue: [], labels: [], t
 let busy = false;
 let stopRequested = false;
 
+// ---------------- names ----------------
+// PosPort keeps the real product name (tidied); tickets get the short shelf name.
+const posNameOf = (full, size) => R.shortName(full, size || '', S.shortInPosPort ? S.ticketNameMax : S.nameMaxLength);
+const ticketNameOf = (full, size) => R.shortName(full, size || '', S.ticketNameMax);
+function setNames(r, full, size) {
+  if (!full) return;
+  r.full = full; r.fullSize = size || '';
+  if (!r.nameEdited) r.name = posNameOf(full, size);
+  if (!r.tnameEdited) r.tname = ticketNameOf(r.nameEdited ? r.name : full, r.nameEdited ? '' : size);
+}
+
 // ---------------- small utilities ----------------
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -59,6 +70,7 @@ function pause(text) {
 async function loadAll() {
   const d = await chrome.storage.local.get(['settings', 'categories', 'add', 'check', 'checkInput', 'catalogue', 'tickets', 'tkOpts']);
   if (d.settings) S = Object.assign({}, S, d.settings);
+  if (!S.namesV2) { if (S.nameMaxLength === 28) S.nameMaxLength = 60; S.namesV2 = true; chrome.storage.local.set({ settings: S }); }
   if (d.categories && d.categories.length) categories = d.categories;
   ['add', 'check', 'checkInput', 'catalogue', 'tickets'].forEach((k) => { if (Array.isArray(d[k])) state[k] = d[k]; });
   if (d.tkOpts) state.tkOpts = d.tkOpts;
@@ -243,16 +255,19 @@ function renderAdd() {
   const t = $('addTable');
   if (!state.add.length) { t.innerHTML = ''; $('addSummary').textContent = 'No items loaded.'; return; }
   const catOpts = (sel) => ['<option value="">— choose —</option>'].concat(categories.map((c) => '<option' + (c === sel ? ' selected' : '') + '>' + esc(c) + '</option>')).join('');
-  t.innerHTML = '<thead><tr><th><input type="checkbox" id="addAll" checked></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th class="num">Highest</th><th class="num">Our price</th><th>Label name</th><th>Category</th><th>Status</th></tr></thead><tbody>' +
+  t.innerHTML = '<thead><tr><th><input type="checkbox" id="addAll" checked></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th class="num">Highest</th><th class="num">Our price</th><th>Name in PosPort <span class="muted">/ on ticket</span></th><th>Category</th><th>Status</th></tr></thead><tbody>' +
     state.add.map((r, i) => {
       const len = (r.name || '').length;
+      const tlen = (r.tname || '').length;
       return '<tr data-i="' + i + '">' +
         '<td><input type="checkbox" class="use" ' + (r.use !== false ? 'checked' : '') + '></td>' +
         '<td>' + esc(r.barcode) + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
         '<td>' + storeCell(r.ww) + '</td><td>' + storeCell(r.coles) + '</td>' +
         '<td class="num">' + m(r.highest) + '</td>' +
         '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '"></td>' +
-        '<td><input type="text" class="name" value="' + esc(r.name || '') + '"><span class="count' + (len > S.nameMaxLength ? ' over' : '') + '">' + len + '/' + S.nameMaxLength + '</span>' + (r.net ? '<span class="sub">name: ' + esc(r.net.source) + '</span>' : '') + '</td>' +
+        '<td><input type="text" class="name" value="' + esc(r.name || '') + '"><span class="count' + (len > S.nameMaxLength ? ' over' : '') + '">' + len + '/' + S.nameMaxLength + '</span>' +
+          '<div class="tname-row"><span class="muted">ticket</span><input type="text" class="tname" value="' + esc(r.tname || '') + '"><span class="count tcount' + (tlen > S.ticketNameMax ? ' over' : '') + '">' + tlen + '/' + S.ticketNameMax + '</span></div>' +
+          (r.net ? '<span class="sub">name: ' + esc(r.net.source) + '</span>' : '') + '</td>' +
         '<td><select class="cat">' + catOpts(r.category) + '</select></td>' +
         '<td>' + addStatusPill(r) + '</td></tr>';
     }).join('') + '</tbody>';
@@ -272,6 +287,16 @@ $('addTable').addEventListener('input', (e) => {
     const c = tr.querySelector('.count');
     c.textContent = r.name.length + '/' + S.nameMaxLength;
     c.classList.toggle('over', r.name.length > S.nameMaxLength);
+    if (!r.tnameEdited) {           // keep the ticket name following the PosPort name
+      r.tname = ticketNameOf(r.name, '');
+      tr.querySelector('.tname').value = r.tname;
+    }
+  }
+  if (e.target.classList.contains('tname')) r.tnameEdited = true, r.tname = e.target.value;
+  if (e.target.classList.contains('tname') || e.target.classList.contains('name')) {
+    const tc = tr.querySelector('.tcount');
+    tc.textContent = (r.tname || '').length + '/' + S.ticketNameMax;
+    tc.classList.toggle('over', (r.tname || '').length > S.ticketNameMax);
   }
   if (e.target.classList.contains('price')) { r.price = R.parseMoney(e.target.value); r.priceEdited = true; }
   saveState();
@@ -291,7 +316,7 @@ $('addFile').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   const rows = R.parseInputRows(await readSheet(f));
-  state.add = rows.map((x) => ({ barcode: x.barcode, inName: x.name, hint: x.hint, name: x.name ? R.shortName(x.name, '', S.nameMaxLength) : '', category: x.category, overridePrice: x.price, price: x.price, status: 'waiting', use: true }));
+  state.add = rows.map((x) => { const r = { barcode: x.barcode, inName: x.name, hint: x.hint, name: '', tname: '', category: x.category, overridePrice: x.price, price: x.price, status: 'waiting', use: true }; setNames(r, x.name, ''); return r; });
   $('addFileInfo').textContent = f.name + ' — ' + rows.length + ' items';
   log('Loaded ' + rows.length + ' barcodes from ' + f.name);
   e.target.value = '';
@@ -319,11 +344,14 @@ $('addMarkup').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('ad
 $('addRename').addEventListener('click', () => {
   let n = 0;
   state.add.forEach((r) => {
-    if (r.nameEdited || r.status === 'created') return;
+    if ((r.nameEdited && r.tnameEdited) || r.status === 'created') {
+      if (r.status === 'created' && !r.tnameEdited && r.name) { r.tname = ticketNameOf(r.name, ''); n++; }
+      return;
+    }
     const src = (r.ww && r.ww.found && r.ww) || (r.coles && r.coles.found && r.coles) || r.net;
     const full = r.inName || (src && src.name) || r.hint;
     if (!full) return;
-    r.name = R.shortName(full, r.inName ? '' : (src && src.size) || '', S.nameMaxLength); n++;
+    setNames(r, full, r.inName ? '' : (src && src.size) || ''); n++;
   });
   renderAdd(); saveState();
   log(n + ' names made again (names you typed yourself were kept).', 'ok');
@@ -354,8 +382,8 @@ $('addLookup').addEventListener('click', async () => {
       r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
       const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
       const nameSrc = src || r.net;
-      if (nameSrc && (!r.inName || !r.name)) r.name = R.shortName(nameSrc.name, nameSrc.size, S.nameMaxLength);
-      else if (!r.name && r.hint) r.name = R.shortName(r.hint, '', S.nameMaxLength);
+      if (nameSrc && !r.inName) setNames(r, nameSrc.name, nameSrc.size);
+      else if (!r.name && r.hint) setNames(r, r.hint, '');
       if (!r.category) r.category = R.guessCategory(nameSrc ? nameSrc.name : (r.inName || r.hint), (res.ww && res.ww.dept) || (r.net && r.net.dept), categories);
       r.price = r.overridePrice || R.newItemPrice(res.highest, S);
       const unsure = [res.ww, res.coles].some((s) => s && s.found && s.match && s.match !== 'barcode');
@@ -392,7 +420,7 @@ $('addCreate').addEventListener('click', async () => {
   const skipped = state.add.filter((r) => r.use !== false && !todo.includes(r) && r.status !== 'created' && r.status !== 'filled').length;
   if (!todo.length) { log('Nothing ready to create (need name, price and category).', 'err'); return; }
   const long = todo.filter((r) => r.name.length > S.nameMaxLength).length;
-  if (!confirm('Create ' + todo.length + ' items in PosPort?' + (skipped ? '\n' + skipped + ' ticked rows are missing a name/price/category and will be skipped.' : '') + (long ? '\n' + long + ' names are longer than ' + S.nameMaxLength + ' and may be cut off on labels.' : ''))) return;
+  if (!confirm('Create ' + todo.length + ' items in PosPort?' + (skipped ? '\n' + skipped + ' ticked rows are missing a name/price/category and will be skipped.' : '') + (long ? '\n' + long + ' names are longer than ' + S.nameMaxLength + ' characters.' : ''))) return;
   setBusy(true);
   try {
     for (let start = 0; start < todo.length; start += S.batchSize) {
@@ -994,18 +1022,21 @@ function tkOpts() {
   return {
     w: pick('tkW', 'tkWc', 2.5), h: pick('tkH', 'tkHc', 1), paper: $('tkPaper').value, shop: $('tkShop').value.trim(),
     barcode: $('tkBarcode').checked, unit: $('tkUnit').checked, date: $('tkDate').checked, border: $('tkBorder').checked,
+    layout: $('tkLayout').value,
   };
 }
 
 function saveTkOpts() {
   state.tkOpts = { W: $('tkW').value, Wc: $('tkWc').value, H: $('tkH').value, Hc: $('tkHc').value, paper: $('tkPaper').value, shop: $('tkShop').value,
-    barcode: $('tkBarcode').checked, unit: $('tkUnit').checked, date: $('tkDate').checked, border: $('tkBorder').checked };
+    barcode: $('tkBarcode').checked, unit: $('tkUnit').checked, date: $('tkDate').checked, border: $('tkBorder').checked,
+    layout: $('tkLayout').value, shorten: $('tkShorten').checked };
   saveState();
 }
 function loadTkOpts() {
   const o = state.tkOpts || {};
   if (o.W) $('tkW').value = o.W; if (o.Wc) $('tkWc').value = o.Wc; if (o.H) $('tkH').value = o.H; if (o.Hc) $('tkHc').value = o.Hc;
   if (o.paper) $('tkPaper').value = o.paper; if (o.shop) $('tkShop').value = o.shop;
+  if (o.layout) $('tkLayout').value = o.layout; if (o.shorten !== undefined) $('tkShorten').checked = o.shorten;
   ['barcode', 'unit', 'date', 'border'].forEach((k) => { if (o[k] !== undefined) $('tk' + k[0].toUpperCase() + k.slice(1)).checked = o[k]; });
   $('tkWc').classList.toggle('hidden', $('tkW').value !== 'custom');
   $('tkHc').classList.toggle('hidden', $('tkH').value !== 'custom');
@@ -1020,9 +1051,11 @@ function addTickets(items) {
   let n = 0;
   items.forEach((it) => {
     if (!it.name) return;
-    const dup = state.tickets.find((t) => t.name.toLowerCase() === it.name.toLowerCase());
+    const full = it.full || it.name;
+    const dup = state.tickets.find((t) => (t.full || t.name).toLowerCase() === full.toLowerCase());
     if (dup) { if (it.price) dup.price = it.price; if (it.barcode && !dup.barcode) dup.barcode = it.barcode; return; }
-    state.tickets.push({ name: it.name, price: it.price || null, was: it.was || null, barcode: it.barcode || '', size: it.size || sizeFromName(it.name), qty: 1, use: true });
+    const short = it.full ? it.name : ($('tkShorten').checked ? ticketNameOf(full, '') : full);
+    state.tickets.push({ full, name: short, price: it.price || null, was: it.was || null, barcode: it.barcode || '', size: it.size || sizeFromName(full), qty: 1, use: true });
     n++;
   });
   saveState(); renderTickets();
@@ -1039,7 +1072,7 @@ function ticketHTML(t, o) {
   const meta = [t.size ? '<b>' + esc(t.size) + '</b>' : '', unit ? esc(unit) : ''].filter(Boolean).join(' · ');
   const foot = [o.shop ? esc(o.shop) : '', o.date ? new Date().toLocaleDateString('en-AU') : ''].filter(Boolean).join(' · ');
   const special = was && price && was > price;
-  return '<div class="ticket' + (o.border ? ' bordered' : '') + (special ? ' has-was' : '') + '" style="--tw:' + o.w + 'in;--th:' + o.h + 'in">' +
+  return '<div class="ticket layout-' + (o.layout || 'bold') + (o.border ? ' bordered' : '') + (special ? ' has-was' : '') + '" style="--tw:' + o.w + 'in;--th:' + o.h + 'in">' +
     (was && price && was > price ? '<div class="t-was">SPECIAL<s>' + m(was) + '</s></div>' : '') +
     '<div class="t-name">' + esc(t.name) + '</div>' +
     '<div class="t-info">' +
@@ -1047,26 +1080,40 @@ function ticketHTML(t, o) {
       (enc ? '<div class="t-bc">' + B.barcodeSVG(t.barcode) + '</div><div class="t-digits">' + esc(enc.text) + '</div>' : '') +
       (foot ? '<div class="t-shop">' + foot + '</div>' : '') +
     '</div>' +
+    (meta ? '<div class="t-meta t-meta-side">' + meta.replace(' · ', '<br>') + '</div>' : '') +
     '<div class="t-price"><span class="cur">$</span><span class="dol">' + dollars + '</span><span class="cts">' + cents + '</span></div>' +
   '</div>';
 }
 
-// Make the name as big as possible within 2 lines, and the price as big as the space allows.
+// Make the name as big as possible (within its line limit), then the price as big as the space allows
+// without the ticket overflowing. Works for every layout.
 function fitTickets(root) {
   root.querySelectorAll('.ticket').forEach((el) => {
-    const h = el.getBoundingClientRect().height;
+    const H = el.clientHeight, W = el.clientWidth;
+    const layout = (el.className.match(/layout-(\w+)/) || [])[1] || 'bold';
     const nm = el.querySelector('.t-name');
-    let fs = Math.min(13, h / 96 * 72 * 0.2);        // start: ~20% of ticket height, in pt
-    nm.style.fontSize = fs + 'pt';
-    while (fs > 6 && (nm.scrollHeight > nm.clientHeight + 1)) { fs -= 0.5; nm.style.fontSize = fs + 'pt'; }
     const pr = el.querySelector('.t-price');
-    const info = el.querySelector('.t-info');
-    const room = h - nm.getBoundingClientRect().height - 6;
-    let ps = Math.max(10, room * 0.95);               // px
+    // overflow measured on the boxes (big price digits deliberately hang outside their tight line box)
+    const over = () => { const e = el.getBoundingClientRect();
+      return ['.t-name', '.t-price', '.t-info'].some((q) => { const b = el.querySelector(q).getBoundingClientRect(); return b.bottom > e.bottom + 1 || b.right > e.right + 1; }); };
+    let fs = Math.min(layout === 'compact' ? 12 : 13, H / 96 * 72 * (layout === 'posport' ? 0.17 : 0.2));
+    nm.style.fontSize = fs + 'pt';
+    while (fs > 6 && nm.scrollHeight > nm.clientHeight + 1) { fs -= 0.5; nm.style.fontSize = fs + 'pt'; }
+    const share = { bold: el.querySelector('.t-bc') ? 0.5 : 0.62, posport: 0.62, compact: 0.45 }[layout];
+    const pad = 8;
+    const infoH = Array.from(el.querySelector('.t-info').children).filter((c) => getComputedStyle(c).display !== 'none')
+      .reduce((a, c) => a + c.getBoundingClientRect().height, 0) + 2;
+    const nameH = nm.getBoundingClientRect().height;
+    const room = layout === 'bold' ? H - nameH - pad
+      : layout === 'posport' ? H - nameH - infoH - pad
+      : H - infoH - pad;                                   // compact: price sits beside the name
+    let ps = Math.max(10, room / (layout === 'posport' ? 1.0 : 0.85));
     pr.style.fontSize = ps + 'px';
-    const maxW = el.getBoundingClientRect().width * (el.querySelector('.t-bc') ? 0.48 : 0.62);
-    while (ps > 10 && (pr.getBoundingClientRect().width > maxW || pr.getBoundingClientRect().height > room)) { ps -= 1; pr.style.fontSize = ps + 'px'; }
-    if (info) info.style.maxHeight = room + 'px';
+    const tooBig = () => { const b = pr.getBoundingClientRect(); return b.width > W * share || b.height > room + 1; };
+    while (ps > 9 && tooBig()) { ps -= 1; pr.style.fontSize = ps + 'px'; }
+    while (ps > 9 && over()) { ps -= 1; pr.style.fontSize = ps + 'px'; }
+    // still overflowing (very small ticket): shrink the name a bit more
+    while (fs > 6 && over()) { fs -= 0.5; nm.style.fontSize = fs + 'pt'; }
   });
 }
 
@@ -1078,7 +1125,7 @@ function renderTickets() {
   } else {
     t.innerHTML = '<thead><tr><th><input type="checkbox" id="tkAll" checked></th><th>Name on ticket</th><th class="num">Price $</th><th class="num">Was $ <span class="muted">(special)</span></th><th>Size</th><th>Barcode</th><th class="num">Copies</th><th></th></tr></thead><tbody>' +
       state.tickets.map((x, i) => '<tr data-i="' + i + '"><td><input type="checkbox" class="use" ' + (x.use !== false ? 'checked' : '') + '></td>' +
-        '<td><input type="text" class="tk-name" value="' + esc(x.name) + '"></td>' +
+        '<td><input type="text" class="tk-name" value="' + esc(x.name) + '">' + (x.full && x.full !== x.name ? '<span class="sub">PosPort: ' + esc(x.full) + '</span>' : '') + '</td>' +
         '<td class="num"><input type="number" step="0.01" class="price tk-price" value="' + (x.price ? Number(x.price).toFixed(2) : '') + '"></td>' +
         '<td class="num"><input type="number" step="0.01" class="price tk-was" value="' + (x.was ? Number(x.was).toFixed(2) : '') + '"></td>' +
         '<td><input type="text" class="tk-size price" value="' + esc(x.size || '') + '"></td>' +
@@ -1099,7 +1146,7 @@ $('tkTable').addEventListener('input', (e) => {
   if (!tr) return;
   const x = state.tickets[+tr.dataset.i];
   const c = e.target.classList;
-  if (c.contains('tk-name')) x.name = e.target.value;
+  if (c.contains('tk-name')) { x.name = e.target.value; x.nameEdited = true; }
   if (c.contains('tk-price')) x.price = R.parseMoney(e.target.value);
   if (c.contains('tk-was')) x.was = R.parseMoney(e.target.value);
   if (c.contains('tk-size')) x.size = e.target.value;
@@ -1119,7 +1166,7 @@ $('tkTable').addEventListener('click', (e) => {
   state.tickets.splice(+e.target.closest('tr').dataset.i, 1);
   saveState(); renderTickets();
 });
-['tkW', 'tkH', 'tkPaper', 'tkShop', 'tkBarcode', 'tkUnit', 'tkDate', 'tkBorder', 'tkWc', 'tkHc'].forEach((id) => {
+['tkW', 'tkH', 'tkPaper', 'tkShop', 'tkBarcode', 'tkUnit', 'tkDate', 'tkBorder', 'tkWc', 'tkHc', 'tkLayout', 'tkShorten'].forEach((id) => {
   $(id).addEventListener('input', () => { loadTkOptsVisibility(); saveTkOpts(); renderTickets(); });
   $(id).addEventListener('change', () => { loadTkOptsVisibility(); saveTkOpts(); renderTickets(); });
 });
@@ -1133,7 +1180,7 @@ $('tkFromAdd').addEventListener('click', () => {
   if (!rows.length) { log('No new items with a name and price yet.', 'err'); return; }
   addTickets(rows.map((r) => {
     const src = (r.ww && r.ww.found && r.ww) || (r.coles && r.coles.found && r.coles) || r.net || {};
-    return { name: r.name, price: r.price, barcode: r.barcode, size: sizeFromName(r.name) || src.size || '' };
+    return { full: r.name, name: r.tname || ticketNameOf(r.name, ''), price: r.price, barcode: r.barcode, size: sizeFromName(r.name) || src.size || '' };
   }));
 });
 $('tkFromCheck').addEventListener('click', () => {
@@ -1172,6 +1219,10 @@ $('tkAddLines').addEventListener('click', () => {
   addTickets(items);
   $('tkPaste').value = '';
 });
+$('tkReshort').addEventListener('click', () => {
+  state.tickets.forEach((x) => { if (!x.nameEdited) x.name = $('tkShorten').checked ? ticketNameOf(x.full || x.name, '') : (x.full || x.name); });
+  saveState(); renderTickets();
+});
 $('tkClear').addEventListener('click', () => {
   if (state.tickets.length && !confirm('Remove all ' + state.tickets.length + ' tickets from the list?')) return;
   state.tickets = []; saveState(); renderTickets();
@@ -1199,11 +1250,12 @@ $('tkPrint').addEventListener('click', () => {
 // =====================================================================
 // SETTINGS
 // =====================================================================
-const NUM_KEYS = ['markup', 'flagLow', 'flagHigh', 'nameMaxLength', 'delayMs', 'batchSize'];
+const NUM_KEYS = ['markup', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize'];
 function fillSettings() {
   NUM_KEYS.forEach((k) => { $('s_' + k).value = S[k]; });
   $('s_extraBlankRow').checked = !!S.extraBlankRow;
   $('s_autoCreate').checked = !!S.autoCreate;
+  $('s_shortInPosPort').checked = !!S.shortInPosPort;
   $('s_autoExportFailed').checked = S.autoExportFailed !== false;
   $('s_selectors').value = S.selectors && Object.keys(S.selectors).length ? JSON.stringify(S.selectors, null, 2) : '';
   $('s_abbrevs').value = S.abbrevs || '';
@@ -1216,6 +1268,7 @@ $('sSave').addEventListener('click', async () => {
   NUM_KEYS.forEach((k) => { const v = parseFloat($('s_' + k).value); if (isFinite(v)) S[k] = v; });
   S.extraBlankRow = $('s_extraBlankRow').checked;
   S.autoCreate = $('s_autoCreate').checked;
+  S.shortInPosPort = $('s_shortInPosPort').checked;
   S.autoExportFailed = $('s_autoExportFailed').checked;
   S.abbrevs = $('s_abbrevs').value;
   const raw = $('s_selectors').value.trim();

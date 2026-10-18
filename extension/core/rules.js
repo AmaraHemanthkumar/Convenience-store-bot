@@ -10,7 +10,9 @@
     markup: 1.5,           // new items: highest supermarket price + this
     flagLow: 1.5,          // existing items: flag if our price is less than this above highest
     flagHigh: 2.0,         // existing items: flag if our price is more than this above highest
-    nameMaxLength: 28,     // fits the Dymo 25x54mm label at "Medium" name size
+    nameMaxLength: 60,     // name saved in PosPort: the real product name, only tidied
+    ticketNameMax: 40,     // name printed on our own tickets: shortened with shelf shorthand (2 lines)
+    shortInPosPort: false, // true = also save the short ticket name in PosPort
     delayMs: 700,          // pause between website actions
     batchSize: 20,         // items per Bulk Create page
     extraBlankRow: true,   // keep one extra empty row (works around the Bulk Create bug)

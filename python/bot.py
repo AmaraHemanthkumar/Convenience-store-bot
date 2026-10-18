@@ -88,7 +88,7 @@ class Bot:
 
     # ---------- settings ----------
     def load_settings(self):
-        s = {"markup": 1.5, "flagLow": 1.5, "flagHigh": 2.0, "nameMaxLength": 28, "delayMs": 700,
+        s = {"markup": 1.5, "flagLow": 1.5, "flagHigh": 2.0, "nameMaxLength": 60, "delayMs": 700,
              "batchSize": 20, "extraBlankRow": True, "autoCreate": False, "selectors": {},
              "abbrevs": "Classic=CLS\nSpecial=SPL"}
         if SETTINGS_FILE.exists():

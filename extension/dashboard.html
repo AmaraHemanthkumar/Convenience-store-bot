@@ -145,12 +145,15 @@
               <input type="number" step="0.05" id="tkHc" class="small-num hidden" placeholder="in"></label>
             <label>Paper <select id="tkPaper"><option value="roll">Label roll – one ticket per label</option><option value="a4">A4 sheet – cut out</option></select></label>
             <label>Shop name <input type="text" id="tkShop" placeholder="(optional)"></label>
+            <label>Layout <select id="tkLayout"><option value="bold">Bold – big price on the right</option><option value="posport">PosPort style – price under the name</option><option value="compact">Compact – name and price on one row</option></select></label>
           </div>
           <div class="row">
             <label class="check"><input type="checkbox" id="tkBarcode" checked> Barcode</label>
             <label class="check"><input type="checkbox" id="tkUnit" checked> Unit price</label>
             <label class="check"><input type="checkbox" id="tkDate"> Date</label>
             <label class="check"><input type="checkbox" id="tkBorder" checked> Border</label>
+            <label class="check"><input type="checkbox" id="tkShorten" checked> Short names (shelf shorthand)</label>
+            <button id="tkReshort" class="btn small">Redo names</button>
           </div>
         </div>
         <div class="step">
@@ -171,7 +174,9 @@
         <label>Markup for new items ($)<input type="number" step="0.01" id="s_markup"></label>
         <label>Flag if less than this above highest ($)<input type="number" step="0.01" id="s_flagLow"></label>
         <label>Flag if more than this above highest ($)<input type="number" step="0.01" id="s_flagHigh"></label>
-        <label>Max label name length<input type="number" id="s_nameMaxLength"></label>
+        <label>Max length of the name saved in PosPort<input type="number" id="s_nameMaxLength"></label>
+        <label>Max length of the name on our tickets<input type="number" id="s_ticketNameMax"></label>
+        <label class="check wide"><input type="checkbox" id="s_shortInPosPort"> Save the short ticket name in PosPort too (normally PosPort keeps the real product name)</label>
         <label class="wide">Your shorthand for long names (one per line, e.g. <code>Classic=CLS</code>). The first word (brand) is never shortened.
           <textarea id="s_abbrevs" rows="4" placeholder="Classic=CLS&#10;Special=SPL&#10;Chocolate=CHOC"></textarea></label>
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>

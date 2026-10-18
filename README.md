@@ -85,10 +85,20 @@ Each tab has a **Download failed items** button, and the file also downloads aut
 - the closest PosPort items and the words that were searched;
 - ready-made Woolworths and Coles search links.
 
+### Two names per item
+- **Name in PosPort:** the real product name, tidied up (up to 60 characters). This makes PosPort searches, receipts and the bot's own matching work better.
+- **Name on ticket:** made from it with the shelf shorthand (up to 40 characters, so it fits on two lines).
+
+Both are shown in the Add table and you can edit either one. To save the short name in PosPort as well, tick the option in Settings.
+
 ### 4 · My tickets (print your own shelf tickets)
 These are made by the bot itself, so you don't need PosPort's label page:
 - **Sizes:** 2.5 or 3 inches wide, 1 or 1.25 inches tall, or any custom size.
 - **On each ticket:** the name (as large as fits on 2 lines), a big price, the size, the unit price (e.g. $6.32 per 100g), and a scannable barcode (EAN-13/EAN-8/UPC; anything else is drawn as Code 128). Optionally the shop name and date.
+- **Layouts:**
+  - **Bold** – big price on the right.
+  - **PosPort style** – price under the name, barcode centred, like the PosPort label page.
+  - **Compact** – name and price side by side.
 - **Specials:** fill in **Was $** and the ticket gets a black SPECIAL tag with the old price crossed out.
 - **Where items come from:** new items, price-check changes, the Labels list, or pasted lines like `Name | Price | Barcode`.
 - **Paper:** *Label roll* prints one ticket per page at exactly the ticket size. *A4 sheet* fits as many as possible, with cut lines.
