@@ -175,10 +175,17 @@ async function posGo(path, wantPage) {
 }
 
 // ---------------- supermarkets ----------------
+const storeTabOpening = {}, storeBlocked = {};
+async function storeTab(kind) {
+  const cfg = STORES[kind];
+  if (!storeTabOpening[kind]) storeTabOpening[kind] = findOrOpen(cfg.match, cfg.home).finally(() => { setTimeout(() => { storeTabOpening[kind] = null; }, 0); });
+  return storeTabOpening[kind];
+}
 async function storeCall(kind, fn, args) {
   const cfg = STORES[kind];
   for (let attempt = 0; attempt < 3; attempt++) {
-    const tabId = await findOrOpen(cfg.match, cfg.home);
+    if (storeBlocked[kind]) await storeBlocked[kind];          // another lookup is waiting for you to solve a check
+    const tabId = await storeTab(kind);
     const res = await exec(tabId, ['core/rules.js', 'core/stores.js'], async (f, argv) => {
       try { return await CSB_STORES[f].apply(null, argv); } catch (e) { return { found: false, error: String(e && e.message || e) }; }
     }, [fn, args]);
@@ -190,8 +197,12 @@ async function storeCall(kind, fn, args) {
       continue;
     }
     if (res && res.blocked) {
+      if (storeBlocked[kind]) { const go = await storeBlocked[kind]; if (!go) return Object.assign(res, { error: 'Stopped' }); continue; }
       await chrome.tabs.update(tabId, { active: true });
-      const go = await pause(cfg.label + ' is showing a check page (or blocked the request). Solve it in that tab, then press Continue.');
+      storeBlocked[kind] = pause(cfg.label + ' is showing a check page (or blocked the request). Solve it in that tab, then press Continue.' +
+        (S.parallel > 1 ? ' Tip: set fewer parallel look-ups in Settings if this keeps happening.' : ''));
+      const go = await storeBlocked[kind];
+      storeBlocked[kind] = null;
       if (!go) return Object.assign(res, { error: 'Stopped' });
       continue;
     }
@@ -201,13 +212,25 @@ async function storeCall(kind, fn, args) {
 }
 
 async function lookupPrices(barcode, nameHint) {
-  const ww = await storeCall('ww', 'wwLookup', [barcode, nameHint || '']);
-  await sleep(S.delayMs);
-  const colesHint = ww && ww.found ? ww.name : nameHint;
-  const coles = await storeCall('coles', 'colesLookup', [barcode, colesHint || '']);
+  // Woolworths and Coles are asked at the same time
+  let [ww, coles] = await Promise.all([
+    storeCall('ww', 'wwLookup', [barcode, nameHint || '']),
+    storeCall('coles', 'colesLookup', [barcode, nameHint || '']),
+  ]);
+  // Coles often can't find a barcode: try again with the Woolworths product name
+  if (!(coles && coles.found) && ww && ww.found && ww.name !== nameHint) coles = await storeCall('coles', 'colesLookup', ['', ww.name]);
   await sleep(S.delayMs);
   const highest = R.highestPrice(ww && ww.found ? ww.regular : null, coles && coles.found ? coles.regular : null);
   return { ww, coles, highest };
+}
+
+// Run `work` on items from `next()` with up to n at the same time.
+async function runPool(n, next, work) {
+  const workers = Array.from({ length: Math.max(1, n) }, async (_, k) => {
+    await sleep(k * 250);                          // stagger the start
+    for (;;) { const item = next(); if (!item) return; await work(item); }
+  });
+  await Promise.all(workers);
 }
 
 // ---------------- Excel ----------------
@@ -362,6 +385,7 @@ function addStatusPill(r) {
     if (r.updated === false) return '<span class="pill bad" title="' + esc(r.note || '') + '">update failed</span>';
     return '<span class="pill idle">in PosPort</span>';
   }
+  if (r.looking) return '<span class="pill idle">looking up…</span>';
   const map = { waiting: 'idle', ready: 'ok', check: 'warn', 'not found': 'bad', created: 'ok', filled: 'warn', error: 'bad', skipped: 'idle' };
   return '<span class="pill ' + (map[r.status] || 'idle') + '" title="' + esc(r.note || '') + '">' + esc(r.status === 'ready' ? 'new – ready' : r.status) + '</span>';
 }
@@ -754,16 +778,20 @@ async function startLookup(again) {
     $('addScanInfo').textContent = state.catalogue.length ? 'Checked against ' + state.catalogue.length + ' PosPort items' : 'PosPort not checked';
     let n = 0;
     const tried = new Set();
-    for (;;) {
+    const next = () => {
+      if (lookupStop) return null;
       const waiting = (x) => ['waiting', 'error', 'not found'].includes(x.status) && !tried.has(x) && (x.barcode || x.inName || x.hint);
       const open = new Set((state.files || []).filter((f) => f.open).map((f) => f.id));
       const r = state.add.find((x) => waiting(x) && open.has(x.fileId || 'old')) || state.add.find(waiting);
-      if (!r || lookupStop) break;
-      tried.add(r);
+      if (r) { tried.add(r); r.looking = true; }
+      return r;
+    };
+    await runPool(S.parallel || 3, next, async (r) => {
       n++;
-      await lookupOne(r);
+      try { await lookupOne(r); } catch (e) { r.status = 'error'; r.note = String(e.message || e); }
+      r.looking = false;
       refreshRow(r); saveState();
-    }
+    });
     if (n) {
       const nPos = state.add.filter((r) => r.pos).length, nNew = state.add.length - nPos;
       log('Done: ' + nNew + ' new items, ' + nPos + ' already in PosPort (' + state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length + ' prices flagged).', 'ok');
@@ -1980,20 +2008,17 @@ scanBox('buyScan', (code) => {
 $('buyLookup').addEventListener('click', async () => {
   setBusy(true);
   try {
-    for (;;) {
-      const r = state.buy.find((x) => !x.ww && !x.tried);
-      if (!r || stopRequested) break;
-      r.tried = true;
+    const next = () => { if (stopRequested) return null; const r = state.buy.find((x) => !x.ww && !x.tried); if (r) r.tried = true; return r; };
+    await runPool(S.parallel || 3, next, async (r) => {
       log('Comparing ' + (r.name || r.barcode));
       const res = await lookupPrices(r.barcode, r.name);
       r.ww = res.ww; r.coles = res.coles;
       if (!r.name) { const src = (res.ww && res.ww.found && res.ww) || (res.coles && res.coles.found && res.coles); if (src) r.name = src.name; }
-      // our sell price in PosPort
       const c = (r.barcode && state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, r.barcode))) ||
         (r.name && state.catalogue.length ? (() => { const mm = R.posMatch(r.name, state.catalogue, (x) => x.name); return mm.sure ? mm.item : null; })() : null);
       if (c) { r.sell = c.price; r.posName = c.name; }
       buyVerdict(r); renderBuy(); saveState();
-    }
+    });
     state.buy.forEach((r) => { delete r.tried; });
     log('Comparison finished.', 'ok');
   } finally { setBusy(false); renderBuy(); }
@@ -2125,7 +2150,7 @@ $('bkItems').addEventListener('click', () => runBackup(true));
 // =====================================================================
 // SETTINGS
 // =====================================================================
-const NUM_KEYS = ['markup', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize'];
+const NUM_KEYS = ['markup', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel'];
 function fillSettings() {
   NUM_KEYS.forEach((k) => { $('s_' + k).value = S[k]; });
   $('s_extraBlankRow').checked = !!S.extraBlankRow;
@@ -2143,6 +2168,7 @@ function fillSettings() {
 $('sSave').addEventListener('click', async () => {
   NUM_KEYS.forEach((k) => { const v = parseFloat($('s_' + k).value); if (isFinite(v)) S[k] = v; });
   S.extraBlankRow = $('s_extraBlankRow').checked;
+  S.parallel = Math.max(1, Math.min(6, Math.round(S.parallel || 3)));
   S.autoCreate = $('s_autoCreate').checked;
   S.shortInPosPort = $('s_shortInPosPort').checked;
   S.autoTickets = $('s_autoTickets').checked;

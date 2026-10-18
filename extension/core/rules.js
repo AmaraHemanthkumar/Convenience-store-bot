@@ -14,6 +14,7 @@
     ticketNameMax: 40,     // name printed on our own tickets: shortened with shelf shorthand (2 lines)
     shortInPosPort: false, // true = also save the short ticket name in PosPort
     delayMs: 700,          // pause between website actions
+    parallel: 3,           // how many items are looked up at the same time (1-6)
     batchSize: 20,         // items per Bulk Create page
     extraBlankRow: true,   // keep one extra empty row (works around the Bulk Create bug)
     autoCreate: false,     // press "Create N Items" automatically after filling

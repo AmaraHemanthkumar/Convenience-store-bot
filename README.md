@@ -35,6 +35,7 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
    - Click the row to **open the whole sheet** and work on it.
    - The bot reads the columns by itself. If a file comes out wrong, use **Columns…** on that file's row to pick them.
    - **The open file is looked up first**, and the other files keep being looked up in the background while you work.
+   - **Look-ups run in parallel:** Woolworths and Coles are asked at the same time, and 3 items are looked up at once. You can set 1–6 in Settings. If the shops start showing "are you a robot" pages, lower it.
    - **Each file row has its own buttons:** Create N new · Tick flagged · Save N changes · Tickets (send the whole file to the print list) · Excel · ✕ remove.
 
    For every barcode the bot:
