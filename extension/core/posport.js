@@ -89,7 +89,13 @@
   }
 
   function findByText(re, scope, selector) {
-    const els = Array.from((scope || document).querySelectorAll(selector || 'button,[role="button"],a,span,div,li,p'));
+    if (selector) {
+      // Looking for a button/link: match the button itself, even when its text sits in an inner <span>
+      // (e.g. <button><svg/><span>Add Row</span></button>). Prefer an enabled one.
+      const els = Array.from((scope || document).querySelectorAll(selector)).filter((e) => visible(e) && re.test(norm(e.textContent)));
+      return els.find((e) => !e.disabled && e.getAttribute('aria-disabled') !== 'true') || els[0];
+    }
+    const els = Array.from((scope || document).querySelectorAll('button,[role="button"],a,span,div,li,p'));
     return els.find((e) => visible(e) && re.test(norm(e.textContent)) && !Array.from(e.children).some((c) => re.test(norm(c.textContent))));
   }
 
@@ -144,6 +150,8 @@
       filled: rows.filter((r) => norm(r.nameInput.value)).length,
       missingPrice: rows.filter((r) => !r.priceInput).length,
       createLabel: create ? norm(create.textContent) : null,
+      addRowFound: !!findByText(SEL.addRowButton, document, 'button'),
+      placeholders: Array.from(new Set(inputs().filter(visible).map((i) => i.placeholder || i.getAttribute('aria-label') || '(none)'))).slice(0, 15),
       toasts: toasts(),
     };
   }

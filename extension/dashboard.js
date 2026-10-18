@@ -38,6 +38,12 @@ function setBusy(on) {
   if (!on) refreshButtons();
 }
 
+// Show a problem in the banner (not just the log) and wait for OK.
+async function problem(text) {
+  log(text, 'err');
+  await pause('⚠ ' + text);
+}
+
 // Pause with a banner until the user presses Continue (true) or Stop (false).
 function pause(text) {
   return new Promise((resolve) => {
@@ -361,10 +367,11 @@ $('addCreate').addEventListener('click', async () => {
       if (stopRequested) break;
       const batch = todo.slice(start, start + S.batchSize);
       log('Opening Bulk Create for items ' + (start + 1) + '–' + (start + batch.length));
-      if (!(await posGo('/catalog/items/bulk', 'bulk'))) { log('Bulk Create page did not open.', 'err'); break; }
+      if (!(await posGo('/catalog/items/bulk', 'bulk'))) { await problem('The Bulk Create page did not load properly. Check you are logged in to PosPort, then try again.'); break; }
       const need = batch.length + (S.extraBlankRow ? 1 : 0);
       const rr = await pos('ensureRows', need, S.delayMs);
-      if (!rr || !rr.ok) { log('Could not add rows: ' + (rr && rr.error), 'err'); break; }
+      if (!rr || !rr.ok) { await problem('Could not add rows on the Bulk Create page: ' + (rr && rr.error) + ' Go to Settings › "Test PosPort page" while on Bulk Create and send the result.'); break; }
+      log('Bulk Create has ' + rr.rows + ' rows. Filling ' + batch.length + ' items…');
       let failed = false;
       for (let i = 0; i < batch.length; i++) {
         if (stopRequested) { failed = true; break; }
@@ -969,7 +976,7 @@ $('sTest').addEventListener('click', async () => {
   try {
     const info = await pos('pageInfo');
     let extra = '';
-    if (info && info.page === 'bulk') { const b = await pos('bulkStatus'); extra = b.rows + ' rows, ' + b.missingPrice + ' without a price box, button: ' + b.createLabel; }
+    if (info && info.page === 'bulk') { const b = await pos('bulkStatus'); extra = b.rows + ' rows, ' + b.missingPrice + ' without a price box, Add Row button ' + (b.addRowFound ? 'found' : 'NOT found') + ', create button: ' + b.createLabel + ', boxes: ' + (b.placeholders || []).join(' / '); }
     else if (info && info.page === 'items') { const l = await pos('readListRows'); extra = (l.rows || []).length + ' rows read, first: ' + ((l.rows || [])[0] ? l.rows[0].name + ' ' + m(l.rows[0].price) : '—'); }
     else if (info && info.page === 'item') { const p = await pos('readEditPrice'); extra = p.ok ? 'price box shows ' + m(p.price) : p.error; }
     const cap = await pos('captured');

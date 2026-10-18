@@ -20,7 +20,7 @@ def main():
         page.goto(MOCK)
 
         st = call(page, "bulkStatus")
-        assert st["rows"] == 4 and st["missingPrice"] == 0, st
+        assert st["rows"] == 1 and st["missingPrice"] == 0 and st["addRowFound"], st
         assert call(page, "ensureRows", 6, 50)["rows"] == 6
         cats = call(page, "bulkGetCategories")
         assert "Gum and Mints" in cats["categories"], cats

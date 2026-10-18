@@ -81,7 +81,7 @@ def main():
             [r.querySelector('[placeholder="Enter Item Name"]').value, r.querySelector('.price').value, r.querySelector('.val').textContent])""")
         print("PosPort rows:", filled)
         assert filled[0][1] == "6.00" and filled[0][2] == "CONFECTIONERY"
-        assert len(filled) >= 4  # 3 items + 1 spare row
+        assert len(filled) == 2 and filled[1][0] == ""  # 1 valid item + 1 spare empty row (other sample barcodes fail the check digit)
         page.click("#bannerContinue")
         wait_until(page, lambda: page.locator("#addTable .pill.ok").count() >= 1)
 
