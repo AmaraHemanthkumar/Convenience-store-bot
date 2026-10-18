@@ -49,6 +49,24 @@ function setBusy(on) {
   if (!on) refreshButtons();
 }
 
+// Banner with several choices; resolves with the chosen label.
+function choose(text, labels) {
+  return new Promise((resolve) => {
+    const bar = $('banner');
+    $('bannerText').textContent = text;
+    $('bannerContinue').classList.add('hidden'); $('bannerStop').classList.add('hidden');
+    const extra = labels.map((l, i) => { const b = document.createElement('button'); b.className = 'btn small choice' + (i === 0 ? ' primary' : ''); b.textContent = l; bar.appendChild(b); return b; });
+    bar.classList.remove('hidden');
+    extra.forEach((b) => { b.onclick = () => {
+      extra.forEach((x) => x.remove());
+      $('bannerContinue').classList.remove('hidden'); $('bannerStop').classList.remove('hidden');
+      bar.classList.add('hidden');
+      if (/stop/i.test(b.textContent)) stopRequested = true;
+      resolve(b.textContent);
+    }; });
+  });
+}
+
 // Show a problem in the banner (not just the log) and wait for OK.
 async function problem(text) {
   log(text, 'err');
@@ -247,7 +265,7 @@ function storeCell(s) {
 // 1. ADD NEW ITEMS
 // =====================================================================
 function addStatusPill(r) {
-  const map = { waiting: 'idle', ready: 'ok', check: 'warn', exists: 'warn', 'not found': 'bad', created: 'ok', filled: 'ok', error: 'bad' };
+  const map = { waiting: 'idle', ready: 'ok', check: 'warn', exists: 'warn', 'not found': 'bad', created: 'ok', filled: 'warn', error: 'bad', skipped: 'idle' };
   return '<span class="pill ' + (map[r.status] || 'idle') + '" title="' + esc(r.note || '') + '">' + esc(r.status) + '</span>';
 }
 
@@ -415,60 +433,100 @@ $('addCats').addEventListener('click', async () => {
   } finally { setBusy(false); }
 });
 
-$('addCreate').addEventListener('click', async () => {
+$('addCreate').addEventListener('click', () => runCreate(false));
+$('addRetry').addEventListener('click', () => runCreate(true));
+
+async function discardBulk() {
+  const c = await pos('cancelBulk', S.delayMs);
+  log(c && c.pressedCancel ? 'Cancelled the half-filled Bulk Create page.' : 'Cleared the Bulk Create page.');
+  await sleep(800);
+}
+
+// retry = true: first throw away the half-filled Bulk Create page, then redo every row that
+// failed or was filled but never confirmed as created.
+async function runCreate(retry) {
+  if (retry) {
+    const redo = state.add.filter((r) => r.status === 'error' || r.status === 'filled');
+    if (!redo.length) { log('Nothing to retry.', 'err'); return; }
+    redo.forEach((r) => { r.status = r.name && r.price > 0 && r.category ? 'ready' : 'not found'; r.note = 'retry'; r.use = true; });
+    renderAdd(); saveState();
+    setBusy(true);
+    try { if (await posTabOnBulk()) await discardBulk(); } finally { setBusy(false); }
+  }
   const todo = state.add.filter((r) => r.use !== false && (r.status === 'ready' || r.status === 'check') && r.name && r.price > 0 && r.category);
-  const skipped = state.add.filter((r) => r.use !== false && !todo.includes(r) && r.status !== 'created' && r.status !== 'filled').length;
+  const skipped = state.add.filter((r) => r.use !== false && !todo.includes(r) && !['created', 'filled', 'exists'].includes(r.status)).length;
   if (!todo.length) { log('Nothing ready to create (need name, price and category).', 'err'); return; }
   const long = todo.filter((r) => r.name.length > S.nameMaxLength).length;
-  if (!confirm('Create ' + todo.length + ' items in PosPort?' + (skipped ? '\n' + skipped + ' ticked rows are missing a name/price/category and will be skipped.' : '') + (long ? '\n' + long + ' names are longer than ' + S.nameMaxLength + ' characters.' : ''))) return;
+  if (!confirm((retry ? 'Retry: create ' : 'Create ') + todo.length + ' items in PosPort?' + (skipped ? '\n' + skipped + ' ticked rows are missing a name/price/category and will be skipped.' : '') + (long ? '\n' + long + ' names are longer than ' + S.nameMaxLength + ' characters.' : ''))) return;
   setBusy(true);
   try {
-    for (let start = 0; start < todo.length; start += S.batchSize) {
-      if (stopRequested) break;
-      const batch = todo.slice(start, start + S.batchSize);
-      log('Opening Bulk Create for items ' + (start + 1) + '–' + (start + batch.length));
-      if (!(await posGo('/catalog/items/bulk', 'bulk'))) { await problem('The Bulk Create page did not load properly. Check you are logged in to PosPort, then try again.'); break; }
+    let start = 0, attempts = 0;
+    while (start < todo.length && !stopRequested) {
+      const batch = todo.slice(start, start + S.batchSize).filter((it) => it.status !== 'skipped');
+      if (!batch.length) { start += S.batchSize; continue; }
+      log('Opening Bulk Create for items ' + (start + 1) + '–' + (start + batch.length) + (attempts ? ' (try ' + (attempts + 1) + ')' : ''));
+      if (!(await posGo('/catalog/items/bulk', 'bulk'))) { await problem('The Bulk Create page did not load properly. Check you are logged in to PosPort, then press Retry.'); break; }
       const need = batch.length + (S.extraBlankRow ? 1 : 0);
       const rr = await pos('ensureRows', need, S.delayMs);
       if (!rr || !rr.ok) { await problem('Could not add rows on the Bulk Create page: ' + (rr && rr.error) + ' Go to Settings › "Test PosPort page" while on Bulk Create and send the result.'); break; }
       log('Bulk Create has ' + rr.rows + ' rows. Filling ' + batch.length + ' items…');
-      let failed = false;
+      let bad = null;
       for (let i = 0; i < batch.length; i++) {
-        if (stopRequested) { failed = true; break; }
+        if (stopRequested) break;
         const it = batch[i];
         const res = await pos('fillBulkRow', i, { name: it.name, barcode: it.barcode, price: it.price, category: it.category }, S.delayMs);
-        if (!res || !res.ok) {
-          it.status = 'error'; it.note = res && res.error;
-          log('Row ' + (i + 1) + ' (' + it.name + '): ' + (res && res.error), 'err');
-          failed = true;
-          break;
-        }
+        if (!res || !res.ok) { it.status = 'error'; it.note = res && res.error; bad = it; log('Row ' + (i + 1) + ' (' + it.name + '): ' + (res && res.error), 'err'); break; }
         it.status = 'filled';
         renderAdd();
         await sleep(S.delayMs / 2);
       }
-      if (failed) {
-        await pause('Stopped at a problem row (see the log). Fix it in the PosPort tab if you like, then press Continue to go on or Stop.');
-        if (stopRequested) break;
+      const resetBatch = () => batch.forEach((it) => { if (it.status === 'filled' || it.status === 'error') it.status = 'ready'; });
+
+      if (bad || stopRequested) {
+        const ans = stopRequested ? 'Stop' : await choose('Row "' + bad.name + '" could not be filled (' + (bad.note || 'unknown') + '). What now?',
+          ['Retry this batch', 'Skip that item and retry', 'Stop']);
+        if (ans === 'Stop') { await discardBulk(); resetBatch(); if (bad) bad.status = 'error'; break; }
+        await discardBulk();
+        resetBatch();
+        if (ans.startsWith('Skip')) { bad.status = 'skipped'; bad.use = false; bad.note = 'skipped after a failed fill'; }
+        if (++attempts >= 3 && ans.startsWith('Retry')) { await problem('Still failing after 3 tries – stopping. Check the item, then use "Retry unfinished".'); if (bad) bad.status = 'error'; break; }
+        renderAdd(); saveState();
+        continue;                                   // same batch again
       }
+
       const tabId = await posTab();
-      if (S.autoCreate && !failed) {
+      let created = true;
+      if (S.autoCreate) {
         const c = await pos('clickCreate');
         log(c && c.ok ? 'Pressed "' + c.clicked + '"' : 'Create button: ' + (c && c.error), c && c.ok ? 'ok' : 'err');
         await sleep(2500);
         const st = await pos('toasts');
         if (Array.isArray(st) && st.length) log('PosPort says: ' + st.join(' | '));
+        if (!c || !c.ok || (Array.isArray(st) && st.some((t) => /error|fail|invalid|required|exists/i.test(t)))) created = false;
       } else {
         await chrome.tabs.update(tabId, { active: true });
-        const go = await pause('Batch filled. Check the rows in the PosPort tab and press "Create" there. Then come back and press Continue.');
-        if (!go) break;
+        const ans = await choose('Batch filled. Check the rows in PosPort and press "Create" there. Did it work?',
+          ['Created OK', 'It failed – clear and retry', 'Stop']);
+        if (ans === 'Stop') { resetBatch(); break; }
+        created = ans === 'Created OK';
       }
-      batch.forEach((it) => { if (it.status === 'filled') it.status = 'created'; });
+      if (!created) {
+        if (++attempts >= 3) { await problem('Creating failed 3 times – stopping. Use "Retry unfinished" later.'); batch.forEach((it) => { it.status = 'error'; }); break; }
+        await discardBulk(); resetBatch(); renderAdd(); saveState();
+        continue;
+      }
+      batch.forEach((it) => { if (it.status === 'filled') { it.status = 'created'; it.note = ''; } });
       renderAdd(); saveState();
+      start += S.batchSize; attempts = 0;
     }
     log('Create run finished. Download the comparison Excel to keep a record.', 'ok');
-  } finally { setBusy(false); }
-});
+  } finally { setBusy(false); renderAdd(); saveState(); }
+}
+
+async function posTabOnBulk() {
+  const tabs = await chrome.tabs.query({ url: POS + '/catalog/items/bulk*' });
+  return tabs.length > 0;
+}
 
 $('addExport').addEventListener('click', () => {
   const rows = state.add.map((r) => ({
@@ -491,7 +549,7 @@ $('addExport').addEventListener('click', () => {
   log('Comparison Excel downloaded.', 'ok');
 });
 
-const ADD_FAILED = ['not found', 'error', 'check'];
+const ADD_FAILED = ['not found', 'error', 'check', 'skipped'];
 $('addFailed').addEventListener('click', () => {
   const rows = state.add.filter((r) => ADD_FAILED.includes(r.status)).map((r) => Object.assign({
     'Why it failed': r.status === 'check' ? 'Matched by name, not barcode – make sure it is the same product'
@@ -1029,13 +1087,13 @@ function tkOpts() {
 function saveTkOpts() {
   state.tkOpts = { W: $('tkW').value, Wc: $('tkWc').value, H: $('tkH').value, Hc: $('tkHc').value, paper: $('tkPaper').value, shop: $('tkShop').value,
     barcode: $('tkBarcode').checked, unit: $('tkUnit').checked, date: $('tkDate').checked, border: $('tkBorder').checked,
-    layout: $('tkLayout').value, shorten: $('tkShorten').checked };
+    layout: $('tkLayout').value, shorten: $('tkShorten').checked, v2: true };
   saveState();
 }
 function loadTkOpts() {
   const o = state.tkOpts || {};
   if (o.W) $('tkW').value = o.W; if (o.Wc) $('tkWc').value = o.Wc; if (o.H) $('tkH').value = o.H; if (o.Hc) $('tkHc').value = o.Hc;
-  if (o.paper) $('tkPaper').value = o.paper; if (o.shop) $('tkShop').value = o.shop;
+  if (o.paper && o.v2) $('tkPaper').value = o.paper; if (o.shop) $('tkShop').value = o.shop;
   if (o.layout) $('tkLayout').value = o.layout; if (o.shorten !== undefined) $('tkShorten').checked = o.shorten;
   ['barcode', 'unit', 'date', 'border'].forEach((k) => { if (o[k] !== undefined) $('tk' + k[0].toUpperCase() + k.slice(1)).checked = o[k]; });
   $('tkWc').classList.toggle('hidden', $('tkW').value !== 'custom');
@@ -1077,7 +1135,7 @@ function ticketHTML(t, o) {
     '<div class="t-name">' + esc(t.name) + '</div>' +
     '<div class="t-info">' +
       (meta ? '<div class="t-meta">' + meta + '</div>' : '') +
-      (enc ? '<div class="t-bc">' + B.barcodeSVG(t.barcode) + '</div><div class="t-digits">' + esc(enc.text) + '</div>' : '') +
+      (enc ? '<div class="t-bc">' + B.barcodeSVG(t.barcode, o.w >= 2.9 ? 0.01333 : 0.01) + '</div><div class="t-digits">' + esc(enc.text) + '</div>' : '') +
       (foot ? '<div class="t-shop">' + foot + '</div>' : '') +
     '</div>' +
     (meta ? '<div class="t-meta t-meta-side">' + meta.replace(' · ', '<br>') + '</div>' : '') +
@@ -1107,9 +1165,9 @@ function fitTickets(root) {
     const room = layout === 'bold' ? H - nameH - pad
       : layout === 'posport' ? H - nameH - infoH - pad
       : H - infoH - pad;                                   // compact: price sits beside the name
-    let ps = Math.max(10, room / (layout === 'posport' ? 1.0 : 0.85));
+    let ps = Math.max(10, room / (layout === 'posport' ? 1.0 : 0.95));
     pr.style.fontSize = ps + 'px';
-    const tooBig = () => { const b = pr.getBoundingClientRect(); return b.width > W * share || b.height > room + 1; };
+    const tooBig = () => { const b = pr.getBoundingClientRect(); return b.width > W * share || b.height > room; };
     while (ps > 9 && tooBig()) { ps -= 1; pr.style.fontSize = ps + 'px'; }
     while (ps > 9 && over()) { ps -= 1; pr.style.fontSize = ps + 'px'; }
     // still overflowing (very small ticket): shrink the name a bit more
@@ -1235,10 +1293,19 @@ $('tkPrint').addEventListener('click', () => {
   if (list.some((x) => !x.price) && !confirm('Some tickets have no price and will show "$–". Print anyway?')) return;
   const area = $('printArea');
   area.className = o.paper;
-  area.innerHTML = list.map((x) => ticketHTML(x, o)).join('');
-  $('pageStyle').textContent = o.paper === 'roll'
-    ? '@page { size: ' + o.w + 'in ' + o.h + 'in; margin: 0; }'
-    : '@page { size: A4; margin: 8mm; }';
+  if (o.paper === 'roll') {
+    area.innerHTML = list.map((x) => ticketHTML(x, o)).join('');
+    $('pageStyle').textContent = '@page { size: ' + o.w + 'in ' + o.h + 'in; margin: 0; }';
+  } else {
+    // A4: our own pages with 8 mm margins, so the browser adds no date/URL headers
+    const M = 8, cols = Math.max(1, Math.floor((210 - 2 * M) / (o.w * 25.4))), rows = Math.max(1, Math.floor((297 - 2 * M) / (o.h * 25.4)));
+    const per = cols * rows, pages = [];
+    for (let i = 0; i < list.length; i += per) pages.push(list.slice(i, i + per));
+    area.innerHTML = pages.map((pg) => '<div class="a4page" style="grid-template-columns:repeat(' + cols + ',' + o.w + 'in);grid-auto-rows:' + o.h + 'in">' +
+      pg.map((x) => ticketHTML(x, o)).join('') + '</div>').join('');
+    $('pageStyle').textContent = '@page { size: A4; margin: 0; }';
+    log(cols + ' × ' + rows + ' = ' + per + ' tickets per A4 page, ' + pages.length + ' page(s).');
+  }
   area.style.display = 'block';
   area.style.position = 'absolute'; area.style.left = '-10000px';
   fitTickets(area);
@@ -1304,7 +1371,8 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 function refreshButtons() {
   if (busy) return;
   $('addLookup').disabled = !state.add.some((r) => r.status === 'waiting' || r.status === 'error' || r.status === 'not found');
-  $('addCreate').disabled = !state.add.some((r) => r.status === 'ready' || r.status === 'check' || r.status === 'error');
+  $('addCreate').disabled = !state.add.some((r) => r.status === 'ready' || r.status === 'check');
+  $('addRetry').disabled = !state.add.some((r) => r.status === 'error' || r.status === 'filled');
   $('addExport').disabled = !state.add.some((r) => r.status !== 'waiting');
   $('addToLabels').disabled = !state.add.some((r) => r.name);
   $('addToTickets').disabled = !state.add.some((r) => r.name && r.price);

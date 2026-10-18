@@ -293,6 +293,20 @@
     return { ok: cats.length > 0, categories: cats };
   }
 
+  // Throw away a half-filled Bulk Create page: press Cancel and accept any "discard changes?" question.
+  async function cancelBulk(delay) {
+    const btn = findByText(/^cancel$/i, document, 'button,a,[role="button"]');
+    if (btn) {
+      realClick(btn);
+      await sleep(delay || 500);
+      const ok = await waitFor(() => findByText(/^(discard|discard changes|yes|leave|confirm|ok|cancel anyway)$/i, document.querySelector('[role="dialog"],[role="alertdialog"],.modal,[class*="dialog"],[class*="Dialog"]') || document, 'button'), 1500);
+      if (ok) { realClick(ok); await sleep(delay || 500); }
+    }
+    // clear any leftover rows so a reload can't ask to keep them
+    bulkRows().forEach((r) => { setValue(r.nameInput, ''); if (r.barcodeInput) setValue(r.barcodeInput, ''); });
+    return { ok: true, pressedCancel: !!btn };
+  }
+
   function clickCreate() {
     const btn = findByText(SEL.createButton, document, 'button');
     if (!btn) return { ok: false, error: 'Could not find the "Create N Items" button.' };
@@ -454,7 +468,7 @@
   }
 
   root.CSB_POSPORT = {
-    SEL, applyOverrides, pageInfo, bulkStatus, ensureRows, fillBulkRow, bulkGetCategories, clickCreate,
+    SEL, applyOverrides, pageInfo, bulkStatus, ensureRows, fillBulkRow, bulkGetCategories, clickCreate, cancelBulk,
     readListRows, searchList, tickRow, clickPrintLabels, nextPage, openItem, readEditPrice, setEditPrice,
     captured, clearCaptured, toasts,
   };

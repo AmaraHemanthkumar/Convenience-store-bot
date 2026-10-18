@@ -110,10 +110,10 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
 .t-info { grid-area: info; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; gap: 0.01in; }
 .t-meta { font-size: 6.5pt; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t-meta b { font-weight: 700; }
-.t-bc { height: calc(var(--th) * 0.27); width: 100%; max-width: 1.45in; display: block; }
-.t-bc svg { width: 100%; height: 100%; display: block; fill: #000; }
+.t-bc { height: calc(var(--th) * 0.27); display: block; max-width: 100%; }
+.t-bc svg { height: 100%; display: block; fill: #000; max-width: 100%; }
 .t-digits { font-size: 5.5pt; letter-spacing: 0.04em; line-height: 1; font-family: "Courier New", monospace; }
-.t-price { grid-area: price; align-self: end; display: flex; align-items: flex-start; line-height: 0.82; font-weight: 800; white-space: nowrap; }
+.t-price { grid-area: price; align-self: end; display: flex; align-items: flex-start; line-height: 0.95; font-weight: 800; white-space: nowrap; }
 .t-price .cur { font-size: 0.42em; margin-top: 0.08em; margin-right: 0.02em; }
 .t-price .dol { font-size: 1em; letter-spacing: -0.02em; }
 .t-price .cts { font-size: 0.48em; margin-top: 0.06em; margin-left: 0.02em; }
@@ -129,8 +129,10 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
   #printArea { display: block !important; }
   #printArea.roll .ticket { page-break-after: always; break-after: page; }
   #printArea.roll .ticket:last-child { page-break-after: auto; break-after: auto; }
-  #printArea.a4 { display: flex !important; flex-wrap: wrap; gap: 0; align-content: flex-start; }
-  #printArea.a4 .ticket { outline: 0.5px dashed #888; outline-offset: -0.25px; break-inside: avoid; }
+  #printArea.a4 .a4page { width: 210mm; height: 296mm; box-sizing: border-box; padding: 8mm; display: grid; align-content: start; justify-content: start;
+    page-break-after: always; break-after: page; overflow: hidden; }
+  #printArea.a4 .a4page:last-child { page-break-after: auto; break-after: auto; }
+  #printArea.a4 .ticket { outline: 0.5px dashed #888; outline-offset: -0.25px; }
   #printArea.a4 .ticket.bordered { outline: 1px solid #000; }
 }
 
@@ -147,11 +149,11 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
 .ticket.layout-posport .t-meta-side { display: block; grid-area: side; align-self: center; justify-self: end; text-align: right; white-space: normal; }
 .ticket.layout-posport .t-info .t-meta { display: none; }
 .ticket.layout-posport .t-info { align-items: center; text-align: center; justify-content: flex-end; }
-.ticket.layout-posport .t-bc { margin: 0 auto; height: calc(var(--th) * 0.22); max-width: 1.3in; }
+.ticket.layout-posport .t-bc { margin: 0 auto; height: calc(var(--th) * 0.22); }
 
 /* Compact: one line name + price, small details below */
 .ticket.layout-compact { grid-template-columns: 1fr auto; grid-template-rows: 1fr auto; grid-template-areas: "name price" "info info"; align-items: center; }
 .ticket.layout-compact .t-name { -webkit-line-clamp: 3; max-height: 3.3em; }
 .ticket.layout-compact .t-price { align-self: center; }
 .ticket.layout-compact .t-info { flex-direction: row; align-items: flex-end; gap: 0.08in; justify-content: space-between; }
-.ticket.layout-compact .t-bc { width: 1.1in; height: calc(var(--th) * 0.2); }
+.ticket.layout-compact .t-bc { height: calc(var(--th) * 0.2); }

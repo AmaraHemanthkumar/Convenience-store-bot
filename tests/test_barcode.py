@@ -14,7 +14,7 @@ with sync_playwright() as p:
     pg.set_content("<body style='margin:0;background:#fff'><div id=c style='width:600px;height:200px;padding:30px'></div></body>")
     pg.add_script_tag(path=str(ROOT / "extension/core/barcode.js"))
     for code in CODES:
-        pg.evaluate("c => document.getElementById('c').innerHTML = CSB_BARCODE.barcodeSVG(c).replace('<svg', '<svg width=\"600\" height=\"200\"')", code)
+        pg.evaluate("c => document.getElementById('c').innerHTML = CSB_BARCODE.barcodeSVG(c, 0.06).replace('<svg', '<svg height=\"200\"')", code)
         out = pathlib.Path(tempfile.mkdtemp()) / "bc.png"
         pg.screenshot(path=str(out))
         found = zxingcpp.read_barcodes(Image.open(out))

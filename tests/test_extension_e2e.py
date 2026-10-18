@@ -89,8 +89,13 @@ def main():
         print("PosPort rows:", filled)
         assert filled[0][1] == "6.00" and filled[0][2] == "CONFECTIONERY"
         assert len(filled) == 2 and filled[1][0] == ""  # 1 valid item + 1 spare empty row (other sample barcodes fail the check digit)
-        page.click("#bannerContinue")
-        wait_until(page, lambda: page.locator("#addTable .pill.ok").count() >= 1)
+        # Create failed in PosPort -> "clear and retry": the page is cancelled/cleared and filled again
+        page.click("#banner button.choice:has-text('It failed')")
+        wait_until(page, lambda: page.locator("#banner:not(.hidden) button.choice:has-text('Created OK')").count() == 1)
+        filled = pos.evaluate("""() => Array.from(document.querySelectorAll('#rows .row')).map(r => r.querySelector('[placeholder="Enter Item Name"]').value)""")
+        assert filled[0].startswith("Allens Minties") and filled[1] == "", filled
+        page.click("#banner button.choice:has-text('Created OK')")
+        wait_until(page, lambda: "created" in page.inner_text("#addTable"))
 
         # Labels: search + tick + Print labels on the mock list
         page.click("[data-tab=labels]")
@@ -139,6 +144,7 @@ def main():
         page.click("#tkAddLines")
         assert page.locator("#tkPreview .ticket").count() == 1
         assert "$3.99 per 100g" not in page.inner_text("#tkPreview") and "$5.70 per 100g" in page.inner_text("#tkPreview")
+        page.select_option("#tkPaper", "roll")
         page.evaluate("window.print = () => {}")
         page.click("#tkPrint")
         page.emulate_media(media="print")

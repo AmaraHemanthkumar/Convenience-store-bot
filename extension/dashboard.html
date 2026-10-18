@@ -52,6 +52,7 @@
           <div class="row">
             <button id="addCats" class="btn">Load categories from PosPort</button>
             <button id="addCreate" class="btn primary" disabled>Create in PosPort</button>
+            <button id="addRetry" class="btn" disabled title="Cancel the half-filled Bulk Create page and try the failed/unfinished rows again">Retry unfinished</button>
           </div>
         </div>
       </div>
@@ -143,7 +144,7 @@
               <input type="number" step="0.05" id="tkWc" class="small-num hidden" placeholder="in"></label>
             <label>Height <select id="tkH"><option value="1">1 in</option><option value="1.25">1.25 in</option><option value="custom">custom…</option></select>
               <input type="number" step="0.05" id="tkHc" class="small-num hidden" placeholder="in"></label>
-            <label>Paper <select id="tkPaper"><option value="roll">Label roll – one ticket per label</option><option value="a4">A4 sheet – cut out</option></select></label>
+            <label>Paper <select id="tkPaper"><option value="a4">A4 paper – many tickets per page, cut out</option><option value="roll">Label printer roll – one ticket per label</option></select></label>
             <label>Shop name <input type="text" id="tkShop" placeholder="(optional)"></label>
             <label>Layout <select id="tkLayout"><option value="bold">Bold – big price on the right</option><option value="posport">PosPort style – price under the name</option><option value="compact">Compact – name and price on one row</option></select></label>
           </div>
@@ -158,7 +159,7 @@
         </div>
         <div class="step">
           <h3>Print</h3>
-          <p>Check the preview (shown at real size), then print. In the print window choose your label printer or A4 printer, and set margins to <b>None</b> and scale to <b>100%</b>.</p>
+          <p>Check the preview (shown at real size), then print. In the print window keep scale at <b>100%</b> (not "Fit to page"). A4 fits as many tickets per page as possible.</p>
           <button id="tkPrint" class="btn primary" disabled>Print tickets</button>
           <span id="tkCount" class="muted"></span>
         </div>

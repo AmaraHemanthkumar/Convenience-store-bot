@@ -45,6 +45,11 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
 6. **Download comparison Excel** saves the cross-check sheet.
 7. **Send names to Labels** passes the new items straight to the Labels tab.
 
+### If creating fails
+- **A row can't be filled:** the bot asks whether to **Retry this batch**, **Skip that item and retry**, or **Stop**. Retrying first cancels the half-filled Bulk Create page.
+- **After you press Create in PosPort:** answer **Created OK**, or **It failed – clear and retry**.
+- **Later:** the **Retry unfinished** button (next to *Create in PosPort*) cancels any half-filled page and redoes every row that failed or was never confirmed as created.
+
 ### 2 · Price check
 1. **Scan PosPort items** goes through Catalog › Items page by page. Tip: set *Rows per page* to the largest number first, so there are fewer pages.
 2. Choose what to check: either **an Excel of barcodes** (it can include a `Name` column), or **Use all scanned items**.
@@ -101,8 +106,8 @@ These are made by the bot itself, so you don't need PosPort's label page:
   - **Compact** – name and price side by side.
 - **Specials:** fill in **Was $** and the ticket gets a black SPECIAL tag with the old price crossed out.
 - **Where items come from:** new items, price-check changes, the Labels list, or pasted lines like `Name | Price | Barcode`.
-- **Paper:** *Label roll* prints one ticket per page at exactly the ticket size. *A4 sheet* fits as many as possible, with cut lines.
-- **When printing:** set margins to **None** and scale to **100%**.
+- **Paper:** *A4 paper* (the default) fits as many as possible per page with cut lines, e.g. 33 tickets of 2.5×1 in. The browser adds no date or address headers. *Label printer roll* prints one ticket per label.
+- **When printing:** keep scale at **100%** (not "Fit to page"). The barcodes are drawn at exact printer-dot widths, so they print sharp and scan.
 
 ### Settings
 Here you can change:

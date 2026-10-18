@@ -60,23 +60,27 @@
     return { type: 'Code 128', bits: code128(d), text: d };
   }
 
-  function barcodeSVG(raw) {
+  // moduleIn: width of the thinnest bar in inches. 0.01in / 0.01333in are exactly 3 / 4 dots on a
+  // 300 dpi printer (6 / 8 on 600 dpi), so every bar prints the same width and scans cleanly.
+  function barcodeSVG(raw, moduleIn) {
     const e = encode(raw);
     if (!e) return '';
-    const q = 6; // quiet zone in modules
+    const q = 7; // quiet zone in modules
     const w = e.bits.length + q * 2;
-    let x = q, rects = '';
+    const mod = moduleIn || 0.01;
+    let d = '';
     const bits = e.bits;
     for (let i = 0; i < bits.length;) {
       if (bits[i] === '1') {
         let j = i;
         while (j < bits.length && bits[j] === '1') j++;
-        rects += '<rect x="' + x + '" y="0" width="' + (j - i) + '" height="40"/>';
-        x += j - i; i = j;
-      } else { x++; i++; }
+        d += 'M' + (q + i) + ' 0h' + (j - i) + 'v40h-' + (j - i) + 'z';
+        i = j;
+      } else i++;
     }
-    return '<svg class="bc" viewBox="0 0 ' + w + ' 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges">' + rects + '</svg>';
+    return '<svg class="bc" style="width:' + (w * mod).toFixed(4) + 'in" viewBox="0 0 ' + w + ' 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="' + d + '"/></svg>';
   }
+  function barcodeWidthIn(raw, moduleIn) { const e = encode(raw); return e ? (e.bits.length + 14) * (moduleIn || 0.01) : 0; }
 
-  root.CSB_BARCODE = { encode, barcodeSVG, checkDigit };
+  root.CSB_BARCODE = { encode, barcodeSVG, barcodeWidthIn, checkDigit };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
