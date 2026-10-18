@@ -144,6 +144,20 @@ def main():
         page.click("#tkAddLines")
         assert page.locator("#tkPreview .ticket").count() == 1
         assert "$3.99 per 100g" not in page.inner_text("#tkPreview") and "$5.70 per 100g" in page.inner_text("#tkPreview")
+        # Load the saved price-check Excel straight into tickets (only rows with a new price)
+        from openpyxl import Workbook
+        wb = Workbook(); ws = wb.active
+        ws.append(["PosPort item", "Barcode", "Our price $", "Highest $", "Status", "New price $", "Updated"])
+        ws.append(["A2 Full Cream 2L", "9300633603369", 7.5, 4.5, "TOO HIGH", 6.0, "yes"])
+        ws.append(["ALLENS MINTIES 150G", "9300682012345", 5.5, 4.2, "OK", None, ""])
+        ws.append(["Leggos Tomato Paste 500g", "93645102", 4.0, 3.3, "TOO LOW", 4.8, ""])
+        xl = pathlib.Path(tempfile.mkdtemp()) / "price-check-2026-10-18.xlsx"; wb.save(xl)
+        n0 = page.locator("#tkTable tr[data-i]").count()
+        page.set_input_files("#tkFile", str(xl))      # dialog auto-accepted -> only the 2 with a new price
+        wait_until(page, lambda: page.locator("#tkTable tr[data-i]").count() == n0 + 2)
+        assert page.locator("#tkTable tr[data-i]").nth(n0).locator(".tk-price").input_value() == "6.00"
+        names = [page.locator("#tkTable tr[data-i] .tk-name").nth(i).input_value() for i in range(n0, n0 + 2)]
+        assert names[1].startswith("Leggos") and not any("MINTIES" in x for x in names), names
         page.select_option("#tkPaper", "roll")
         page.evaluate("window.print = () => {}")
         page.click("#tkPrint")

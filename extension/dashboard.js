@@ -531,7 +531,8 @@ async function posTabOnBulk() {
 $('addExport').addEventListener('click', () => {
   const rows = state.add.map((r) => ({
     Barcode: r.barcode,
-    'Label name': r.name || '',
+    'Name in PosPort': r.name || '',
+    'Ticket name': r.tname || '',
     Category: r.category || '',
     'Woolworths product': r.ww && r.ww.found ? r.ww.name : '',
     'Woolworths normal $': r.ww && r.ww.found ? r.ww.regular : '',
@@ -1105,7 +1106,7 @@ function sizeFromName(name) {
   return m ? m[m.length - 1] : '';
 }
 
-function addTickets(items) {
+function addTickets(items, quiet) {
   let n = 0;
   items.forEach((it) => {
     if (!it.name) return;
@@ -1116,6 +1117,7 @@ function addTickets(items) {
     state.tickets.push({ full, name: short, price: it.price || null, was: it.was || null, barcode: it.barcode || '', size: it.size || sizeFromName(full), qty: 1, use: true });
     n++;
   });
+  if (quiet) return;
   saveState(); renderTickets();
   log(n + ' tickets added' + (items.length - n ? ', ' + (items.length - n) + ' already there (updated)' : '') + '.', 'ok');
 }
@@ -1266,6 +1268,64 @@ $('tkFromLabels').addEventListener('click', () => {
   if (missing) log(missing + ' barcodes have no known name yet – run them on the Labels tab first.', 'err');
   if (items.some((x) => x.name && !x.price)) log('Some tickets have no price – run "Scan PosPort items" on Price check, or type the price.', 'err');
 });
+// Read any Excel the bot saved (price check, price updates, new items, failed items) or your own sheet.
+// Name: PosPort item / Name in PosPort / Label name / Item name / Name / Product
+// Price: New price (when filled) -> Our price -> Price.  Barcode, Was/Special price and Copies if present.
+function ticketsFromSheet(rows) {
+  if (!rows.length) return { items: [], changed: 0 };
+  const head = rows[0].map((h) => String(h || '').toLowerCase().trim());
+  const find = (...res) => { for (const re of res) { const i = head.findIndex((h) => re.test(h)); if (i >= 0) return i; } return -1; };
+  const cName = find(/^posport item$/, /name in posport/, /^ticket name$/, /^label name/, /^item name$/, /^name$/, /product name/, /^product$/, /^what you entered$/, /^item$/, /name|description/);
+  const cTicket = find(/^ticket name$/);
+  const cNew = find(/^new price/);
+  const cOur = find(/^our price/, /current price/, /^price/, /sell/);
+  const cBc = find(/^barcode$/, /barcode|ean|upc|gtin/);
+  const cWas = find(/^was/, /special/);
+  const cQty = find(/^copies$/, /^qty$/, /quantity/);
+  const cUpd = find(/^updated$/, /^result$/, /^update result$/);
+  if (cName < 0) return { error: 'No name column found (expected "PosPort item", "Name" or "Label name").' };
+  let changed = 0;
+  const items = rows.slice(1).map((r) => {
+    const full = String(r[cName] || '').trim();
+    if (!full || /^\d{7,14}$/.test(full) && cBc < 0) return null;
+    const newP = cNew >= 0 ? R.parseMoney(r[cNew]) : null;
+    const upd = cUpd >= 0 ? String(r[cUpd] || '').toLowerCase() : '';
+    if (newP && !/fail/.test(upd)) changed++;
+    const price = (newP && !/fail/.test(upd)) ? newP : (cOur >= 0 ? R.parseMoney(r[cOur]) : null);
+    const ticket = cTicket >= 0 && cTicket !== cName ? String(r[cTicket] || '').trim() : '';
+    return {
+      full, name: ticket || undefined, price, newPrice: newP,
+      barcode: cBc >= 0 ? R.cleanBarcode(r[cBc]) : '',
+      was: cWas >= 0 ? R.parseMoney(r[cWas]) : null,
+      qty: cQty >= 0 ? Math.max(1, parseInt(r[cQty], 10) || 1) : 1,
+    };
+  }).filter(Boolean);
+  return { items, changed, hasNew: cNew >= 0 };
+}
+
+$('tkFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  e.target.value = '';
+  const res = ticketsFromSheet(await readSheet(f));
+  if (res.error) { log(f.name + ': ' + res.error, 'err'); return; }
+  let items = res.items;
+  if (res.hasNew && res.changed && res.changed < items.length &&
+      confirm(f.name + ' has ' + res.changed + ' items with a new price (out of ' + items.length + ').\n\nOK = only those ' + res.changed + '\nCancel = all ' + items.length + ' items')) {
+    items = items.filter((x) => x.newPrice);
+  }
+  const before = state.tickets.length;
+  items.forEach((x) => {
+    const name = x.name || ($('tkShorten').checked ? ticketNameOf(x.full, '') : x.full);
+    addTickets([{ full: x.full, name, price: x.price, barcode: x.barcode, was: x.was }], true);
+    const t = state.tickets.find((tk) => (tk.full || tk.name).toLowerCase() === x.full.toLowerCase());
+    if (t) { t.qty = x.qty; if (x.was) t.was = x.was; }
+  });
+  saveState(); renderTickets();
+  const noPrice = items.filter((x) => !x.price).length;
+  log('Loaded ' + items.length + ' items from ' + f.name + ' (' + (state.tickets.length - before) + ' new tickets)' + (noPrice ? ' – ' + noPrice + ' have no price, type it in the table.' : '.'), noPrice ? 'err' : 'ok');
+});
+
 $('tkAddLines').addEventListener('click', () => {
   const items = $('tkPaste').value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
     const parts = l.split(/\s*[|\t;]\s*/);

@@ -105,7 +105,10 @@ These are made by the bot itself, so you don't need PosPort's label page:
   - **PosPort style** – price under the name, barcode centred, like the PosPort label page.
   - **Compact** – name and price side by side.
 - **Specials:** fill in **Was $** and the ticket gets a black SPECIAL tag with the old price crossed out.
-- **Where items come from:** new items, price-check changes, the Labels list, or pasted lines like `Name | Price | Barcode`.
+- **Where items come from:** new items, price-check changes, the Labels list, pasted lines like `Name | Price | Barcode`, or **Load Excel / CSV**.
+  - *Load Excel / CSV* reads the Excel files the bot saved: price check, price updates, new-items comparison and failed items.
+  - It also reads your own sheet with a name column and a price column (barcode, was-price and copies are optional).
+  - For a price-check file it uses the **New price** where one is filled in, and asks whether to load only the items whose price changed.
 - **Paper:** *A4 paper* (the default) fits as many as possible per page with cut lines, e.g. 33 tickets of 2.5×1 in. The browser adds no date or address headers. *Label printer roll* prints one ticket per label.
 - **When printing:** keep scale at **100%** (not "Fit to page"). The barcodes are drawn at exact printer-dot widths, so they print sharp and scan.
 

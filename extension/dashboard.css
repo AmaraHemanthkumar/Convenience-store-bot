@@ -157,3 +157,5 @@ footer { position: fixed; bottom: 0; left: 0; right: 0; max-height: 96px; overfl
 .ticket.layout-compact .t-price { align-self: center; }
 .ticket.layout-compact .t-info { flex-direction: row; align-items: flex-end; gap: 0.08in; justify-content: space-between; }
 .ticket.layout-compact .t-bc { height: calc(var(--th) * 0.2); }
+.primary-outline { border-color: var(--accent); color: var(--accent); }
+.small-note { font-size: 12px; }
