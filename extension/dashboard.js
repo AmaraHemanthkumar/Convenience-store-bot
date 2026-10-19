@@ -832,7 +832,7 @@ $('addRename').addEventListener('click', () => {
 
 // ---- is it already in PosPort? ----
 function markInPos(r, item) {
-  r.pos = { name: item.name, price: item.price, id: item.id || '' };
+  r.pos = { name: item.name, price: item.price, id: item.id || '', href: item.href || '', page: item.page || '' };
   r.use = false;
   const chk = R.checkExistingPrice(item.price, r.highest, S);
   r.chk = chk;
@@ -948,26 +948,92 @@ async function lookupOne(r) {
 }
 
 // ---- update prices of items that are already in PosPort ----
-async function updatePosItem(posName, fields) {
+// ---- change an item that is already in PosPort (price and/or name), then check PosPort kept it ----
+const nameKey = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function catalogueEntry(p) {
+  return state.catalogue.find((x) => (p.id && x.id && String(x.id) === String(p.id))) ||
+    state.catalogue.find((x) => nameKey(x.name) === nameKey(p.name));
+}
+// the item's own page, if we know it: from the list link, an earlier visit, or its id + the link pattern of another item
+function itemPagePath(p) {
+  const c = catalogueEntry(p) || {};
+  const link = p.href || c.href || c.page || '';
+  if (link) { try { return new URL(link, POS).pathname; } catch (e) { /* bad link */ } }
+  const id = p.id || c.id;
+  if (id) {
+    const t = state.catalogue.find((x) => (x.href || x.page) && x.id && String(x.href || x.page).includes(String(x.id)));
+    if (t) { try { return new URL(String(t.href || t.page).replace(String(t.id), String(id)), POS).pathname; } catch (e) { /* ignore */ } }
+  }
+  return '';
+}
+async function waitEditPage() {
+  for (let i = 0; i < 24; i++) {
+    const e = await pos('readEditPrice');
+    if (e && e.ok) return e;
+    await sleep(500);
+  }
+  return { ok: false, error: 'The item page did not show its price box.' };
+}
+async function openPosItem(p) {
+  const path = itemPagePath(p);
+  if (path && path !== '/catalog/items') {
+    if (await posGo(path, 'item')) { const e = await waitEditPage(); if (e.ok) return e; }
+  }
   if (!(await posGo('/catalog/items', 'items'))) return { ok: false, error: 'Items page did not open' };
-  const s = await pos('searchList', posName, S.delayMs);
-  if (!s || !s.ok) return s || { ok: false, error: 'search failed' };
-  const o = await pos('openItem', posName, S.delayMs);
+  // search the full name; if PosPort finds nothing, search the first words + size and pick it out of the results
+  const words = String(p.name).split(/\s+/);
+  const size = words.find((w) => /\d/.test(w)) || '';
+  const tries = [p.name, words.slice(0, 2).join(' ') + (size && !words.slice(0, 2).includes(size) ? ' ' + size : ''), words[0]];
+  let o = null;
+  for (const q of tries.filter((q, i, a) => q && a.indexOf(q) === i)) {
+    const s2 = await pos('searchList', q, S.delayMs);
+    if (!s2 || !s2.ok) return s2 || { ok: false, error: 'search failed' };
+    o = await pos('openItem', p.name, S.delayMs);
+    if (!o) o = { ok: true, navigating: true };     // the click moved the tab to the item page, so no answer came back
+    if (o.ok) break;
+  }
   if (!o || !o.ok) return o || { ok: false, error: 'could not open the item' };
   const tabId = await posTab();
-  await sleep(800); await waitComplete(tabId); await sleep(800);
-  return (await pos('setEditFields', fields, S.delayMs)) || { ok: false, error: 'no answer' };
+  await sleep(800); await waitComplete(tabId);
+  return waitEditPage();
 }
-async function updatePosPrice(posName, newPrice) {
-  if (!(await posGo('/catalog/items', 'items'))) return { ok: false, error: 'Items page did not open' };
-  const s = await pos('searchList', posName, S.delayMs);
-  if (!s || !s.ok) return s || { ok: false, error: 'search failed' };
-  const o = await pos('openItem', posName, S.delayMs);
-  if (!o || !o.ok) return o || { ok: false, error: 'could not open the item' };
-  const tabId = await posTab();
-  await sleep(800); await waitComplete(tabId); await sleep(800);
-  return (await pos('setEditPrice', newPrice, S.delayMs)) || { ok: false, error: 'no answer' };
+async function updatePosItem(p, fields) {
+  if (typeof p === 'string') p = { name: p };
+  const e = await openPosItem(p);
+  if (!e.ok) return e;
+  // never change the wrong item
+  if (e.name !== null && e.name !== undefined && nameKey(e.name) !== nameKey(p.name))
+    return { ok: false, error: 'PosPort opened "' + e.name + '" instead – nothing was changed' };
+  const info = await pos('pageInfo');
+  const pagePath = info && info.page === 'item' ? new URL(info.url).pathname : '';
+  const res = await pos('setEditFields', fields, S.delayMs);
+  if (!res || !res.ok) return res || { ok: false, error: 'no answer' };
+  // remember the item's page for next time
+  const c = catalogueEntry(p);
+  if (pagePath) { p.page = pagePath; if (c) c.page = pagePath; }
+  // check it really changed
+  await sleep(1500);
+  const wantName = fields.name || p.name;
+  const priceOk = (x) => fields.price === undefined || Math.abs(Number(x) - Number(fields.price)) < 0.005;
+  if (pagePath && (await posGo(pagePath, 'item'))) {
+    const v = await waitEditPage();
+    if (v.ok) {
+      const nameOk = v.name === null || v.name === undefined || nameKey(v.name) === nameKey(wantName);
+      if (nameOk && priceOk(v.price)) return Object.assign(res, { checked: true });
+      return { ok: false, error: 'PosPort did not keep the change (it still shows "' + (v.name || p.name) + '" ' + m(v.price) + ') – the Save button may need a different click, please tell me' };
+    }
+  }
+  // the item opened as a pop-up: look it up in the list under its new name instead
+  if (await posGo('/catalog/items', 'items')) {
+    const l = await pos('searchList', wantName, S.delayMs);
+    const row = l && l.rows && l.rows.find((x) => nameKey(x.name) === nameKey(wantName));
+    if (row) return priceOk(row.price) ? Object.assign(res, { checked: true }) :
+      { ok: false, error: 'the name changed but the price still shows ' + m(row.price) };
+    if (fields.name) return { ok: false, error: 'PosPort did not keep the new name (no item called "' + wantName + '" after saving)' };
+  }
+  return Object.assign(res, { checked: false });
 }
+const updatePosPrice = (p, newPrice) => updatePosItem(p, { price: newPrice });
 
 function toPrintList(items, what) {
   if (S.autoTickets === false || !items.length) return;
@@ -1003,9 +1069,9 @@ async function runPosUpdates(fid) {
       if (r.newName && r.newName !== r.pos.name) fields.name = r.newName;
       if (!Object.keys(fields).length) { r.apply = false; continue; }
       log('Saving ' + line(r));
-      const res = await updatePosItem(r.pos.name, fields);
+      const res = await updatePosItem(r.pos, fields);
       r.updated = !!(res && res.ok);
-      r.note = r.updated ? 'was ' + m(r.pos.price) + (fields.name ? ' / "' + r.pos.name + '"' : '') : (res && res.error) || 'unknown error';
+      r.note = r.updated ? 'was ' + m(r.pos.price) + (fields.name ? ' / "' + r.pos.name + '"' : '') + (res.checked ? ' · checked in PosPort' : ' · saved, but could not double-check – look in PosPort') : (res && res.error) || 'unknown error';
       if (r.updated) {
         const c = state.catalogue.find((x) => x.name === r.pos.name);
         if (fields.price) { r.pos.price = fields.price; if (c) c.price = fields.price; }
@@ -1014,7 +1080,7 @@ async function runPosUpdates(fid) {
         r.chk = R.checkExistingPrice(r.pos.price, r.highest, S);
         done.push({ full: r.pos.name, name: r.tname || ticketNameOf(r.pos.name, ''), price: r.pos.price, barcode: r.barcode });
       }
-      log(r.pos.name + ': ' + (r.updated ? 'saved' : 'FAILED – ' + r.note), r.updated ? 'ok' : 'err');
+      log(r.pos.name + ': ' + (r.updated ? (res.checked ? 'saved and checked in PosPort' : 'saved, but could not double-check – please look in PosPort') : 'FAILED – ' + r.note), r.updated ? 'ok' : 'err');
       refreshRow(r); saveState();
       if (!r.updated) {
         const go = await pause('Could not save "' + r.pos.name + '": ' + r.note + '. Continue with the next item?');

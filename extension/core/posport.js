@@ -354,16 +354,22 @@
     s.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
     await sleep(delay || 600);
     await waitFor(() => JSON.stringify(listRows().map((r) => r.name)) !== before, 4000);
-    await sleep(300);
+    // the table can redraw in steps (loading row, part results) - wait for the item itself, then for it to settle
+    await waitFor(() => findRow(q), 5000);
+    let last = '';
+    for (let k = 0; k < 6; k++) { const now = JSON.stringify(listRows().map((r) => r.name)); if (now === last) break; last = now; await sleep(300); }
     return readListRows();
   }
 
+  // letters and digits only, so "SMITH'S  BBQ 170G" = "Smiths BBQ 170g"
+  const key = (s) => lc(s).replace(/[^a-z0-9]/g, '');
   function findRow(name) {
     const rows = listRows();
-    const want = lc(name);
-    let r = rows.find((x) => lc(x.name) === want);
-    if (!r) {
-      const c = rows.filter((x) => lc(x.name).includes(want) || want.includes(lc(x.name)));
+    const want = lc(name), wk = key(name);
+    let r = rows.find((x) => lc(x.name) === want) || rows.find((x) => key(x.name) === wk);
+    if (!r && wk) {
+      // the name cell may hold extra text (code, barcode, badge) - accept it when only one row fits
+      const c = rows.filter((x) => key(x.name).includes(wk) || (key(x.name).length > 5 && wk.includes(key(x.name))));
       if (c.length === 1) r = c[0];
     }
     return r || null;
@@ -409,7 +415,10 @@
 
   async function openItem(name, delay) {
     const r = findRow(name);
-    if (!r) return { ok: false, error: 'No exact match for "' + name + '".' };
+    if (!r) {
+      const shown = listRows().slice(0, 4).map((x) => '"' + x.name + '"').join(', ');
+      return { ok: false, error: 'Could not find "' + name + '" in the Items list' + (shown ? ' (it shows ' + shown + ')' : ' (the search showed nothing)') + '.' };
+    }
     if (r.href) { location.href = r.href; return { ok: true, navigating: true }; }
     const cells = Array.from(r.el.querySelectorAll('td,[role="cell"]'));
     const h = headerIndex();

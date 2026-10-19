@@ -279,6 +279,22 @@ def main():
         page.click("#chkScan")
         wait_until(page, lambda: "items ·" in page.inner_text("#chkScanInfo"))
         print("scan:", page.inner_text("#chkScanInfo"))
+        # Rename + new price for an item already in PosPort: opens the item, saves, then re-opens it to check
+        page.click("[data-tab=add]")
+        page.click("#addFilter button[data-f=pos]")
+        row = page.locator("#addTable tr.in-pos").filter(has_text="9300682012345").first
+        row.locator("input.posname").fill("Allens Minties Bag 150g")
+        row.locator("input.newprice").fill("6.20")
+        row.locator("input.newprice").blur()
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.click("#addUpdate")
+        wait_until(page, lambda: "saved" in page.inner_text("#log") or "FAILED" in page.inner_text("#log") or not page.locator("#banner.hidden").count())
+        print("rename log:", page.inner_text("#log").replace("\n", " | ")[-400:])
+        pos = [pg for pg in ctx.pages if "posport" in pg.url][0]
+        kept = pos.evaluate("localStorage.getItem('mockItems')")
+        print("mock Back Office now:", kept)
+        assert '"Allens Minties Bag 150g",6.2,103' in kept, kept
+        assert "saved and checked in PosPort" in page.inner_text("#log"), page.inner_text("#log")[:400]
         assert errors == [], errors
         ctx.close()
     print("extension end-to-end test passed")

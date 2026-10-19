@@ -40,14 +40,17 @@ function makeRow(){
 }
 makeRow();
 document.getElementById('add').onclick=makeRow;
-const ITEMS=[['5 Gum Grape Spark 27g',0],['A2 Full Cream 2L',7.5],['ALLENS MINTIES 150G',5.5],['Allens Minties Party 500g',9]];
-const PAGE2=[['Aramada Foil Trays med 3pack',5.99]];
+// items keep their changes across page loads (like the real Back Office); each has an id and its own page
+const DEFAULT_ITEMS=[['5 Gum Grape Spark 27g',0,101],['A2 Full Cream 2L',7.5,102],['ALLENS MINTIES 150G',5.5,103],['Allens Minties Party 500g',9,104]];
+let ITEMS; try { ITEMS = JSON.parse(localStorage.getItem('mockItems')) || DEFAULT_ITEMS; } catch (e) { ITEMS = DEFAULT_ITEMS; }
+const PAGE2=[['Aramada Foil Trays med 3pack',5.99,105]];
 let page=1;
 function drawItems(q){
   const src=page===1?ITEMS:PAGE2;
   const tb=document.querySelector('#items tbody');tb.innerHTML='';
-  src.filter(([n])=>!q||n.toLowerCase().includes(q.toLowerCase())).forEach(([n,p],i)=>{
-    const tr=document.createElement('tr');tr.innerHTML='<td><input type="checkbox" data-name="'+n+'"></td><td>'+n[0]+'</td><td>'+(i+1)+'</td><td>'+n+'</td><td>$'+p+'</td><td>—</td>';
+  src.filter(([n])=>!q||n.toLowerCase().includes(q.toLowerCase())).forEach(([n,p,id],i)=>{
+    const tr=document.createElement('tr');tr.innerHTML='<td><input type="checkbox" data-name="'+n+'"></td><td>'+n[0]+'</td><td>'+(i+1)+'</td><td class="nm">'+n+'</td><td>$'+p+'</td><td>—</td>';
+    tr.querySelector('.nm').addEventListener('click',()=>{ location.href='/catalog/items/'+id; });   // no link, opens on click
     tb.appendChild(tr);
   });
   tb.querySelectorAll('input').forEach(cb=>{ if(window.sel&&window.sel.has(cb.dataset.name)) cb.checked=true; cb.addEventListener('change',()=>{window.sel=window.sel||new Set(); cb.checked?window.sel.add(cb.dataset.name):window.sel.delete(cb.dataset.name); document.getElementById('printBtn').style.display=window.sel.size?'':'none';});});
@@ -65,6 +68,16 @@ document.getElementById('next').onclick=()=>{ if(page===1){page=2;drawItems('');
   <div id="toast" role="status"></div>
 </div>
 <script>
-document.getElementById('eSave').onclick = () => { document.getElementById('toast').textContent = 'Item updated successfully'; window.savedItem = { name: eName.value, price: ePrice.value }; };
+document.getElementById('eSave').onclick = () => {
+  document.getElementById('toast').textContent = 'Item updated successfully'; window.savedItem = { name: eName.value, price: ePrice.value };
+  const id = Number((location.pathname.match(/\/catalog\/items\/(\d+)/) || [])[1]);
+  const it = ITEMS.find((x) => x[2] === id);
+  if (it) { it[0] = eName.value; it[1] = Number(ePrice.value); localStorage.setItem('mockItems', JSON.stringify(ITEMS)); }
+};
+(function () {   // an item's own page: /catalog/items/<id>
+  const id = Number((location.pathname.match(/\/catalog\/items\/(\d+)/) || [])[1]);
+  const it = id && ITEMS.concat(PAGE2).find((x) => x[2] === id);
+  if (it) setTimeout(() => window.openEdit(it[0], it[1]), 300);
+})();
 window.openEdit = (n, p) => { document.getElementById('editForm').style.display = ''; eName.value = n; ePrice.value = p; };
 </script>
