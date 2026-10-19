@@ -2641,4 +2641,7 @@ function refreshButtons() {
   renderAdd(); renderCheck(); refreshButtons();
   loadTkOpts(); renderTickets(); renderBuy(); renderInvoices();
   log('Ready. Keep PosPort Back Office logged in, in this Chrome window.');
+  // carry on with items that were still waiting when the bot was closed or reloaded
+  const left = state.add.filter((r) => r.status === 'waiting' || r.looking).length;
+  if (left) { state.add.forEach((r) => { if (r.looking) { r.looking = false; r.status = 'waiting'; } }); log('Carrying on: ' + left + ' items still to look up.'); startLookup(); }
 })();
