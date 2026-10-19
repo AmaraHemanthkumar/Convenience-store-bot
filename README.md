@@ -36,6 +36,7 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
    - The bot reads the columns by itself. If a file comes out wrong, use **Columns…** on that file's row to pick them.
    - **The open file is looked up first**, and the other files keep being looked up in the background while you work.
    - **All files move forward together:** every other look-up goes to the file you have open, and the rest take turns across all the other files.
+   - **Gentle on the shops:** however many look-ups run at once, each shop gets at most one request every 0.7 s (*Gap between requests* in Settings). If a shop shows a check page, the bot goes twice as slow with that shop (up to 8x) and speeds back up after a while.
    - **Price memory:** a product that is on several invoices or sheets is looked up only once. The answer is kept for 12 hours, even after closing the bot. **Look up again** clears it and asks the shops fresh.
    - **Look-ups run in parallel:** Woolworths and Coles are asked at the same time, and 3 items are looked up at once. You can set 1–6 in Settings. If the shops start showing "are you a robot" pages, lower it.
    - **Each file row has its own buttons:** Create N new · Tick flagged · Save N changes · Tickets (send the whole file to the print list) · Excel · ✕ remove.
@@ -64,6 +65,7 @@ The bot reads three kinds of invoice PDF by itself:
 - **Wholesale** invoices with barcodes, such as The Distributors Brisbane.
 - **Woolworths** online-order tax invoices (Line · Description · Ordered · Supplied · Price · Amount).
 - **Coles for business** online-order invoices (Product · Ordered · Picked · Unit price · Total charged).
+- **Coca-Cola Europacific Partners** invoices and delivery slips as PDF from myCCA (Material · Description · Qty · CDS · Price net · Extended). Packs like X24, X 12, Ib24 and 6X4 become units. GST is added only to the lines marked * (plain water has none). The container deposit is included. Credit lines such as "Promo Pricing Error" are counted as credits.
 
 Woolworths and Coles invoices have no barcodes. The bot finds each product at the shop by name and copies the barcode, but only when it is a confident match. The barcode then shows *"(barcode from Woolworths)"*. Scanned or photographed invoices have no text, so download the PDF from the website or email instead.
 

@@ -23,7 +23,7 @@ def main(extra=()):
     d = pathlib.Path(tempfile.mkdtemp())
     subprocess.run([sys.executable, str(ROOT / "tests/make_shop_invoices.py"), str(d)], check=True)
     subprocess.run([sys.executable, str(ROOT / "tests/make_invoice_pdf.py"), str(d / "wholesale.pdf")], check=True)
-    paths = {"woolworths": d / "woolworths.pdf", "coles": d / "coles.pdf", "wholesale": d / "wholesale.pdf"}
+    paths = {"woolworths": d / "woolworths.pdf", "coles": d / "coles.pdf", "wholesale": d / "wholesale.pdf", "ccep": d / "ccep.pdf"}
     paths.update({pathlib.Path(x).name: x for x in extra})
     res = read_all(paths)
     for name, inv in res.items():
@@ -47,6 +47,17 @@ def main(extra=()):
     fin = co["items"][3]; assert fin["unitsShort"] == 1 and fin["unitsReceived"] == 3, fin
     assert abs(co["itemsTotal"] - 82.25) < 0.01 and co["printedTotal"] == 82.25, co["itemsTotal"]
     assert wh["kind"] == "wholesale" and len(wh["items"]) == 6, wh["kind"]
+    cc = res["ccep"]
+    assert cc["kind"] == "ccep" and cc["number"] == "240000001" and cc["date"] == "14/10/2026", (cc["kind"], cc["number"], cc["date"])
+    names = [i["name"] for i in cc["items"]]
+    assert names == ["Fanta Orange 600ml", "Mother Rainbow Sherbet 500ml Can", "Monster Mango Loco 500ml Can",
+                     "Mount Franklin Still Water 600ml", "Coca-Cola 375ml Can"], names
+    fanta, water, cans = cc["items"][0], cc["items"][3], cc["items"][4]
+    assert fanta["unitsReceived"] == 24 and abs(fanta["unitCost"] - 2.735) < 0.001, fanta          # 59.67 + 10% GST / 24
+    assert water["gst"] == 0 and water["unitCost"] == 1.9571, water                     # no GST on plain water
+    assert cans["unitsReceived"] == 48, cans                                            # 2 cases of 24
+    assert len(cc["fees"]) == 1 and cc["fees"][0]["desc"].startswith("Promo Pricing") and cc["fees"][0]["amount"] == -31.0, cc["fees"]
+    assert abs(cc["total"] - 252.55) < 0.02 and cc["printedTotal"] == 252.55, (cc["total"], cc["printedTotal"])
     print("invoice pdf tests passed")
 
 if __name__ == "__main__":

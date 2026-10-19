@@ -68,6 +68,31 @@ def coles(out):
     c.drawString(380, y - 10, "Total charged"); c.drawString(505, y - 10, "$82.25")
     c.save()
 
+def ccep(out):
+    """Coca-Cola Europacific Partners style (narrow receipt layout, wrapped descriptions)."""
+    c = canvas.Canvas(str(out), pagesize=(300, 760))
+    c.setFont("Courier", 7)
+    y = 740
+    for t in ["Coca-Cola Europacific Partners Australia PTY LTD", "TAX INVOICE ABN: 00 000 000 000", "",
+              "Customer Number   1000000      Tax Invoice    240000001", "Date          14/10/2026", "",
+              "Material                       CDS   Price   Extended", "Number  Description      Qty  P/C   Net     Price"]:
+        c.drawString(10, y, t); y -= 10
+    rows = [("955734 *", "600Ml PET X24 Fanta Orange", None, "1", "$3.29", "$59.67", "$59.67"),
+            ("958134 *", "500 CAN X24 Mother Rainbow", "Sherbet", "1", "$3.29", "$49.57", "$49.57"),
+            ("954907 *", "500 CAN 6X4 Monster Mango", "Loco", "1", "$3.29", "$53.45", "$53.45"),
+            ("953945  ", "600Ml PET X24 Mount", "Franklin Still Water", "1", "$3.29", "$46.97", "$46.97"),
+            ("950971 *", "375Ml CAN Ib24", "Coca-Cola", "2", "$3.29", "$26.19", "$52.38"),
+            ("880926  ", "Promo Pricing Error-Non", "Taxable", "-3100", "$0.00", "$0.01", "-$31.00")]
+    for mat, d1, d2, q, cds, net, ext in rows:
+        c.drawString(10, y, mat); c.drawString(55, y, d1); c.drawString(170, y, q); c.drawString(190, y, cds); c.drawString(222, y, net); c.drawString(258, y, ext)
+        y -= 10
+        if d2: c.drawString(55, y, d2); y -= 10
+    for t in ["        Total Quantity   6", "Product total before GST, WET and CDS $242.87", "",
+              "Payment Type        Total Taxable    $215.07", "                    Total GST         $21.51",
+              "                    Total Non-Taxable $15.97", "                    Total Price      $252.55"]:
+        c.drawString(10, y, t); y -= 10
+    c.save()
+
 if __name__ == "__main__":
     d = pathlib.Path(sys.argv[1]); d.mkdir(parents=True, exist_ok=True)
-    woolworths(d / "woolworths.pdf"); coles(d / "coles.pdf")
+    woolworths(d / "woolworths.pdf"); coles(d / "coles.pdf"); ccep(d / "ccep.pdf")

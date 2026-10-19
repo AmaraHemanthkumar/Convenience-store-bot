@@ -270,6 +270,7 @@
           <textarea id="s_abbrevs" rows="4" placeholder="Classic=CLS&#10;Special=SPL&#10;Chocolate=CHOC"></textarea></label>
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
         <label>Items looked up at the same time (1–6)<input type="number" id="s_parallel" min="1" max="6"></label>
+        <label>Gap between requests to the same shop (ms) – bigger = gentler on Woolworths/Coles<input type="number" step="100" min="300" id="s_storeGapMs"></label>
         <label>Not at Woolworths/Coles: price = invoice cost + (%)<input type="number" id="s_fallbackMargin"></label>
         <label>Show cost in red below margin (%)<input type="number" id="s_minMargin"></label>
         <label>Items per Bulk Create page<input type="number" id="s_batchSize"></label>

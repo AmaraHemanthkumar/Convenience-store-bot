@@ -193,6 +193,20 @@ async function posGo(path, wantPage) {
 
 // ---------------- supermarkets ----------------
 const storeTabOpening = {}, storeBlocked = {};
+// Be polite to the shops: whatever the number of parallel look-ups, each shop gets at most one request
+// every storeGapMs. After a check page the gap doubles for that shop (up to 8x) and slowly comes back.
+const storeNext = {}, storeSlow = {}, storeOk = {};
+async function storeTurn(kind) {
+  const gap = (S.storeGapMs || 700) * (storeSlow[kind] || 1);
+  const now = Date.now();
+  const at = Math.max(now, storeNext[kind] || 0);
+  storeNext[kind] = at + gap;
+  if (at > now) await sleep(at - now);
+}
+function storeWasFine(kind) {
+  storeOk[kind] = (storeOk[kind] || 0) + 1;
+  if ((storeSlow[kind] || 1) > 1 && storeOk[kind] >= 60) { storeSlow[kind] = Math.max(1, storeSlow[kind] / 2); storeOk[kind] = 0; }
+}
 async function storeTab(kind) {
   const cfg = STORES[kind];
   if (!storeTabOpening[kind]) storeTabOpening[kind] = findOrOpen(cfg.match, cfg.home).finally(() => { setTimeout(() => { storeTabOpening[kind] = null; }, 0); });
@@ -203,6 +217,7 @@ async function storeCall(kind, fn, args) {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (storeBlocked[kind]) await storeBlocked[kind];          // another lookup is waiting for you to solve a check
     const tabId = await storeTab(kind);
+    await storeTurn(kind);
     const res = await exec(tabId, ['core/rules.js', 'core/stores.js'], async (f, argv) => {
       try { return await CSB_STORES[f].apply(null, argv); } catch (e) { return { found: false, error: String(e && e.message || e) }; }
     }, [fn, args]);
@@ -216,6 +231,8 @@ async function storeCall(kind, fn, args) {
     if (res && res.blocked) {
       if (storeBlocked[kind]) { const go = await storeBlocked[kind]; if (!go) return Object.assign(res, { error: 'Stopped' }); continue; }
       await chrome.tabs.update(tabId, { active: true });
+      storeSlow[kind] = Math.min(8, (storeSlow[kind] || 1) * 2); storeOk[kind] = 0;
+      log(cfg.label + ' asked for a check – the bot will now go ' + storeSlow[kind] + 'x slower with ' + cfg.label + ' for a while.', 'err');
       storeBlocked[kind] = pause(cfg.label + ' is showing a check page (or blocked the request). Solve it in that tab, then press Continue.' +
         (S.parallel > 1 ? ' Tip: set fewer parallel look-ups in Settings if this keeps happening.' : ''));
       const go = await storeBlocked[kind];
@@ -223,6 +240,7 @@ async function storeCall(kind, fn, args) {
       if (!go) return Object.assign(res, { error: 'Stopped' });
       continue;
     }
+    if (res && !res.error) storeWasFine(kind);
     return res || { found: false, error: 'No answer' };
   }
   return { found: false, error: cfg.label + ' kept blocking requests' };
@@ -315,7 +333,7 @@ function invoiceIndex() {
       const rec = Object.assign({ supplier: inv.supplier, number: inv.number, date: inv.date }, it);
       if (it.barcode) invIndex.byBarcode.set(R.cleanBarcode(it.barcode).replace(/^0+/, ''), rec);
       if (it.code && it.barcode) invIndex.byCode.set(it.code, rec);
-      invIndex.byName.set(nameKey(INV.tidyName(it.desc)), rec); invIndex.byName.set(nameKey(it.desc), rec);
+      invIndex.byName.set(nameKey(it.name || INV.tidyName(it.desc)), rec); invIndex.byName.set(nameKey(it.desc), rec);
     });
   });
   return invIndex;
@@ -769,9 +787,9 @@ $('addFile').addEventListener('change', async (e) => {
         const key = it.barcode || it.desc.toLowerCase();
         if (seen.has(key)) return;
         seen.add(key);
-        const r = { barcode: it.barcode, inName: '', hint: it.desc, name: '', tname: '', category: '', price: null, status: 'waiting', use: it.shipped > 0, fileId: id,
+        const r = { barcode: it.barcode, inName: '', hint: it.name || it.desc, name: '', tname: '', category: '', price: null, status: 'waiting', use: it.shipped > 0, fileId: id,
           note: it.status ? it.status + ' – not delivered' : '' };
-        setNames(r, INV.tidyName(it.desc), '');
+        setNames(r, it.name || INV.tidyName(it.desc), '');
         r.nameFromInvoice = true;
         rows.push(r);
       });
@@ -1029,7 +1047,7 @@ async function lookupOne(r) {
   r.inv = invoiceFor(r.barcode, [r.hint, r.inName, r.name]);
   const nameSrc = src || r.net;
   if (nameSrc && !r.inName && !r.nameEdited) setNames(r, nameSrc.name, nameSrc.size);
-  else if (!nameSrc && r.inv && !r.inName && !r.nameEdited) { setNames(r, INV.tidyName(r.inv.desc), ''); r.nameFromInvoice = true; }
+  else if (!nameSrc && r.inv && !r.inName && !r.nameEdited) { setNames(r, r.inv.name || INV.tidyName(r.inv.desc), ''); r.nameFromInvoice = true; }
   else if (!r.name && r.hint) setNames(r, r.hint, '');
   if (!r.category) r.category = R.guessCategory(nameSrc ? nameSrc.name : (r.inName || r.hint), (res.ww && res.ww.dept) || (r.net && r.net.dept), categories);
   if (!r.priceEdited) r.price = r.overridePrice || R.newItemPrice(res.highest, S);
@@ -1704,7 +1722,7 @@ async function identifyBarcode(bc) {
   const net = await window.CSB_STORES.internetLookup(bc);
   if (net && net.found) return { name: [net.name, net.size].filter(Boolean).join(' '), source: net.source };
   const iv = invoiceFor(bc);
-  if (iv) return { name: INV.tidyName(iv.desc), source: 'invoice ' + (iv.number || '') };
+  if (iv) return { name: iv.name || INV.tidyName(iv.desc), source: 'invoice ' + (iv.number || '') };
   if (ww && ww.found) return { name: ww.name, source: 'Woolworths (check)' };
   if (co && co.found) return { name: co.name, source: 'Coles (check)' };
   return null;
@@ -2153,7 +2171,7 @@ async function ticketFromBarcode(bc) {
   const id = await identifyBarcode(bc);
   if (!id) {
     const iv = invoiceFor(bc);
-    if (iv) return { full: INV.tidyName(iv.desc), price: iv.rrp || null, barcode: bc, note: 'name from invoice ' + (iv.number || '') + (iv.rrp ? ', price = supplier RRP' : ' – type the price') };
+    if (iv) return { full: iv.name || INV.tidyName(iv.desc), price: iv.rrp || null, barcode: bc, note: 'name from invoice ' + (iv.number || '') + (iv.rrp ? ', price = supplier RRP' : ' – type the price') };
     return { error: 'not found anywhere' };
   }
   if (state.catalogue.length) {
@@ -2336,7 +2354,7 @@ $('buySend').addEventListener('click', () => {
     rows.forEach((b) => {
       if (b.barcode && seen.has(b.barcode)) return;
       if (b.barcode) seen.add(b.barcode);
-      const r = { barcode: b.barcode || '', inName: '', hint: b.supplierDesc || b.name || '', name: '', tname: '', category: '', price: null,
+      const r = { barcode: b.barcode || '', inName: '', hint: b.name || b.supplierDesc || '', name: '', tname: '', category: '', price: null,
         status: 'waiting', use: true, fileId: id, note: '' };
       setNames(r, b.name || INV.tidyName(b.supplierDesc || ''), '');
       items.push(r);
@@ -2366,7 +2384,7 @@ $('buyFile').addEventListener('change', async (e) => {
       try { inv = await readInvoicePdf(f); } catch (err) { log(err.message, 'err'); continue; }
       const label = 'invoice ' + (inv.number || f.name);
       inv.items.forEach((it, k) => state.buy.push({
-        barcode: it.barcode, name: INV.tidyName(it.desc), supplierDesc: it.desc, qty: it.unitsReceived || '', cost: it.unitCost, file: label,
+        barcode: it.barcode, name: it.name || INV.tidyName(it.desc), supplierDesc: it.desc, qty: it.unitsReceived || '', cost: it.unitCost, file: label,
         invRef: { id: inv.id, k }, supplier: inv.supplier,
         notDelivered: it.shipped === 0 ? (it.status || 'not delivered') + (it.unitsShort ? ' – ' + it.unitsShort + ' units short' : '') : '',
         rrp: it.rrp, promo: it.promo,
@@ -2560,7 +2578,7 @@ $('bkItems').addEventListener('click', () => runBackup(true));
 // =====================================================================
 // SETTINGS
 // =====================================================================
-const NUM_KEYS = ['markup', 'markupPct', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel', 'fallbackMargin', 'minMargin'];
+const NUM_KEYS = ['markup', 'markupPct', 'storeGapMs', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel', 'fallbackMargin', 'minMargin'];
 function fillSettings() {
   NUM_KEYS.forEach((k) => { $('s_' + k).value = S[k]; });
   $('s_extraBlankRow').checked = !!S.extraBlankRow;

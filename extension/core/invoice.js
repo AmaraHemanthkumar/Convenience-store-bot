@@ -238,13 +238,78 @@
     return fees;
   }
 
+  // ---------- Coca-Cola Europacific Partners (myCCA) invoices / delivery slips ----------
+  // "955734 * 600Ml PET X24 Fanta Orange   1  $3.29  $59.67  $59.67" = material · GST mark · description ·
+  // cases · container deposit per case · net per case · extended. A long description wraps onto the next line.
+  // "*" = GST applies (plain water has no GST). Extended price includes the container deposit, not GST.
+  const CCEP_LINE = /^(\d{5,7})\s+(\*\s*)?(.+?)\s+(-?\d+)\s*-?\$?(-?\d+\.\d{2})\s+\$?(-?\d+\.\d{2})\s+(-?\$?-?[\d,]+\.\d{2})$/;
+  function ccepPack(desc) {
+    const d = desc.toUpperCase();
+    let m = d.match(/\b(\d+)\s*X\s*(\d+)\b/);                   // 6X4
+    if (m) return Number(m[1]) * Number(m[2]);
+    m = d.match(/\b(?:X|IB)\s*(\d{1,3})\b/);                     // X24, X 12, Ib24
+    return m ? Number(m[1]) : 1;
+  }
+  function ccepName(desc) {
+    let d = ' ' + desc + ' ';
+    let size = '';
+    const sm = d.match(/\s(\d+(?:\.\d+)?)\s*(ML|L)?(?=\s)/i);
+    if (sm) { size = sm[1] + (sm[2] ? (sm[2].toUpperCase() === 'L' ? 'L' : 'ml') : (Number(sm[1]) >= 100 ? 'ml' : 'L')); d = d.replace(sm[0], ' '); }
+    const can = /\sCAN\s/i.test(d);
+    d = d.replace(/\s(PET|CAN|FLO|GLASS|BTL)\s/ig, ' ').replace(/\s\d+\s*X\s*\d+\s/ig, ' ').replace(/\s(?:X|IB)\s*\d{1,3}\s/ig, ' ').replace(/\s+/g, ' ').trim();
+    return (d + (size ? ' ' + size : '') + (can ? ' Can' : '')).trim();
+  }
+  function parseCcepInvoice(lines) {
+    const items = [], fees = [];
+    let last = null;
+    lines.forEach((raw) => {
+      const l = String(raw).replace(/\s+/g, ' ').trim();
+      const m = l.match(CCEP_LINE);
+      if (m) {
+        const [, code, star, desc, qty, cds, net, ext] = m;
+        const q = Number(qty), extended = Number(ext.replace(/[,$]/g, '').replace(/^--/, '-')), gstRate = star ? 0.1 : 0;
+        if (Math.abs(q) > 500 || /promo|pricing error|credit|adjust|rebate/i.test(desc)) {   // credits like "-3100 x $0.01"
+          fees.push({ desc: desc.trim(), amount: Math.round(extended * (1 + gstRate) * 100) / 100 }); last = null; return;
+        }
+        const it = { desc: desc.trim(), code, gst: star ? 10 : 0, shipped: q, cds: Number(cds), priceEx: Number(net), extEx: extended };
+        items.push(it); last = it; return;
+      }
+      // the second line of a wrapped description
+      if (last && l && !/\$|^total|^product total|^payment|^note|^bpay|^\d{5,7}\b/i.test(l) && l.split(' ').length <= 6) { last.desc += ' ' + l; return; }
+      last = null;
+    });
+    const out = items.map((it) => {
+      const per = ccepPack(it.desc);
+      const units = it.shipped * per;
+      const extInc = Math.round(it.extEx * (1 + it.gst / 100) * 100) / 100;
+      return {
+        desc: it.desc, name: ccepName(it.desc), shipped: it.shipped, short: 0, barcode: '', code: it.code, rrp: null, status: it.shipped === 0 ? 'NOT SUPPLIED' : '',
+        soldAs: 'CASE', units: per, gst: it.gst, promo: '', priceEx: it.priceEx, levy: it.cds, priceInc: it.shipped ? Math.round(extInc / it.shipped * 100) / 100 : null,
+        extIncGst: extInc, noCharge: it.shipped > 0 && extInc === 0, unitsReceived: units, unitsShort: 0,
+        unitCost: units > 0 ? Math.round(extInc / units * 10000) / 10000 : null,
+      };
+    });
+    const text = lines.join('\n');
+    const pick = (re) => { const mm = text.match(re); return mm ? mm[1].trim() : ''; };
+    const itemsTotal = out.reduce((a, x) => a + (x.extIncGst || 0), 0);
+    return {
+      kind: 'ccep', supplier: 'Coca-Cola Europacific Partners', items: out, fees, itemsTotal,
+      number: pick(/Tax\s+Invoice\s+(\d{6,})/i) || pick(/Reference\s+Number\s+(\d{6,})/i) || pick(/Invoice (?:No|Number):?\s*(\d{6,})/i),
+      date: pick(/\bDate\s+(\d{1,2}\/\d{1,2}\/\d{4})/i),
+      total: itemsTotal + fees.reduce((a, f) => a + f.amount, 0),
+      printedTotal: Number((pick(/Total\s+Price\s+\$?([\d,]+\.\d{2})/i) || '').replace(/,/g, '')) || null,
+    };
+  }
+
   // Any supported invoice PDF: wholesale (Distributors-style lines with barcodes) or a shop-style table.
   async function readPdf(arrayBuffer) {
     const pages = await pdfToPages(arrayBuffer);
     const lines = [].concat(...pages.map((pc) => piecesToRows(pc).map((r) => r.text)));
     const whole = parseInvoice(lines);
     const table = parseTableInvoice(pages, lines);
-    const inv = table.items.length > whole.items.length ? table : Object.assign(whole, { kind: 'wholesale' });
+    const ccep = /coca-?cola\s+europacific|mycca|CDS\s+P\/C/i.test(lines.join(' ')) ? parseCcepInvoice(lines) : { items: [] };
+    let inv = table.items.length > whole.items.length ? table : Object.assign(whole, { kind: 'wholesale' });
+    if (ccep.items.length >= inv.items.length) inv = ccep;
     inv.lineCount = lines.length;
     return inv;
   }
@@ -269,6 +334,6 @@
       .replace(/\b(\d+(?:\.\d+)?)(G|Kg|Ml|L|Pk|S)\b/gi, (m, n, u) => n + (u.toLowerCase() === 'l' ? 'L' : u.toLowerCase()));
   }
 
-  root.CSB_INVOICE = { parseLine, parseInvoice, parseTableInvoice, piecesToRows, pdfToPages, pdfToLines, readPdf, tidyName };
+  root.CSB_INVOICE = { parseLine, parseInvoice, parseTableInvoice, parseCcepInvoice, ccepName, ccepPack, piecesToRows, pdfToPages, pdfToLines, readPdf, tidyName };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.CSB_INVOICE;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
