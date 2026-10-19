@@ -602,7 +602,7 @@ function rowHTML(r, i) {
     '<td class="invcell">' + (r.status === 'waiting' ? '' : invoiceCellHTML(r, pos ? (r.newPrice || r.pos.price) : r.price)) + '</td>' +
     '<td class="num">' + m(r.highest) + '</td>' +
     (pos
-      ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">new price</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–"></td>'
+      ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">' + (r.priceFromSheet && r.newPrice === r.overridePrice ? 'new price (from your sheet)' : 'new price') + '</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–"></td>'
       : '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '">' + (r.priceEdited ? '<span class="sub">typed</span>' : priceSource(r, r.price) ? '<span class="sub">' + esc(priceSource(r, r.price)) + '</span>' : '') + '</td>') +
     '<td>' + nameCell + '</td>' +
     '<td>' + (pos ? checkPill(r) : '<select class="cat">' + catOptsHTML(r.category) + '</select>') + '</td>' +
@@ -812,6 +812,9 @@ function autoColumns(rows, roles, picksIn) {
 function itemsFromSheet(rows, picks, fileId, seen) {
   const ac = autoColumns(rows, ITEM_ROLES, picks);
   const out = [], byKey = new Map(), repeats = [];
+  // a plain "Price" / "New price" / "Shelf price" column is your price; RRP, cost or shop price columns are not
+  const priceHead = String((ac.header || [])[ac.picks.indexOf('price')] || '');
+  const ownPrice = ac.picks.includes('price') && !/rrp|was|woolworths|coles|cost|highest|posport|supermarket|invoice|unit|per/i.test(priceHead);
   ac.body.forEach((r, ri) => {
     const x = {};
     ac.picks.forEach((role, i) => { if (role !== '_') x[role] = r[i]; });
@@ -827,7 +830,7 @@ function itemsFromSheet(rows, picks, fileId, seen) {
     }
     seen.add(key);
     const price = R.parseMoney(x.price);
-    const it = { barcode, inName: name, hint, name: '', tname: '', category: String(x.category || '').trim(), overridePrice: price, price, status: 'waiting', use: true, fileId };
+    const it = { barcode, inName: name, hint, name: '', tname: '', category: String(x.category || '').trim(), overridePrice: price, price, status: 'waiting', use: true, fileId, sheetPrice: ownPrice && price > 0 };
     setNames(it, name, '');
     out.push(it); byKey.set(key, it);
   });
@@ -1024,6 +1027,11 @@ function markInPos(r, item) {
   r.chk = chk;
   if (!r.newPrice) r.newPrice = chk.flagged ? chk.suggested : null;
   r.apply = false;
+  // the sheet you loaded has its own price for this item (e.g. a corrected shelf-price sheet):
+  // put it in "new price" and tick it, so "Save changes" updates PosPort to your sheet
+  if (r.sheetPrice && r.overridePrice > 0 && Math.abs(r.overridePrice - item.price) >= 0.005) {
+    r.newPrice = r.overridePrice; r.apply = true; r.priceFromSheet = true;
+  }
   if (!r.tnameEdited) r.tname = ticketNameOf(item.name, '');
 }
 

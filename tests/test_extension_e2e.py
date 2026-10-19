@@ -359,6 +359,18 @@ def main():
         print("overlap file:", [" ".join(h.split())[:70] for h in oh])
         assert len(oh) == 1 and "3 items (+1 repeat)" in " ".join(oh[0].split()), oh
 
+        # A shelf-price sheet (Item Name | Barcode | Price): a price that differs from PosPort becomes the ticked new price
+        wbp = Workbook(); wsp = wbp.active; wsp.append(["Item Name", "Barcode", "Price", "Label $", "Invoice RRP $"])
+        wsp.append(["Minties 150g", "9300682012345", 5.95, 5.50, 4.20]); wsp.append(["Kit Kat Chunky 70g", "9300605094703", None, 6.00, 3.65])
+        pp = pathlib.Path(tempfile.mkdtemp()) / "shelf.xlsx"; wbp.save(pp)
+        page.set_input_files("#addFile", str(pp))
+        wait_until(page, lambda: any("shelf.xlsx" in h and "looked up" in h for h in page.locator("#addTable tr.fhead").all_inner_texts()), 120000)
+        hd = page.locator("#addTable tr.fhead").filter(has_text="shelf.xlsx").first
+        if "▸" in hd.inner_text(): hd.click()
+        vals = page.locator("#addTable tr.in-pos input.newprice").evaluate_all("els => els.map(e => [e.value, e.closest('tr').querySelector('input.apply').checked, e.closest('td').innerText])")
+        print("shelf sheet prices:", vals)
+        assert any(v[0] == "5.95" and v[1] and "from your sheet" in v[2] for v in vals), vals
+
         # Tickets for a whole category (from the PosPort item list)
         page.click("[data-tab=tickets]")
         opts = page.locator("#tkCat option").all_inner_texts()
