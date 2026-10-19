@@ -193,6 +193,42 @@ async function posGo(path, wantPage) {
 
 // ---------------- supermarkets ----------------
 const storeTabOpening = {}, storeBlocked = {};
+// When a shop shows a "check" page the bot does NOT jump to that tab or stop: it carries on with the other shop,
+// waits (1, 2, 4 … up to 10 minutes), reloads that shop's tab in the background and tries again by itself.
+// Rows that missed the shop get its price later. Only if it keeps refusing is there a note with a button.
+const storeCool = {}, storeStrikes = {}, storeReloading = {};
+const storeCooling = (kind) => (storeCool[kind] || 0) > Date.now();
+function showStoreNotice() {
+  const box = $('storeNotice');
+  const parts = Object.keys(STORES).filter((k) => storeCooling(k) || (storeStrikes[k] || 0) >= 3).map((k) => {
+    const secs = Math.max(0, Math.round(((storeCool[k] || 0) - Date.now()) / 1000));
+    const label = STORES[k].label;
+    return '<span><b>' + label + '</b> asked for a "not a robot" check. The bot carries on with ' + (k === 'ww' ? 'Coles' : 'Woolworths') +
+      ' and tries ' + label + ' again ' + (secs ? 'in ' + (secs >= 90 ? Math.round(secs / 60) + ' min' : secs + ' s') : 'now') + ' by itself.' +
+      ((storeStrikes[k] || 0) >= 3 ? ' It keeps refusing – if you like, open the tab and tick the check:' : '') + '</span>' +
+      ((storeStrikes[k] || 0) >= 2 ? '<button class="btn small store-open" data-k="' + k + '">Open ' + label + ' tab</button>' : '') +
+      '<button class="btn small store-now" data-k="' + k + '">Try ' + label + ' now</button>';
+  });
+  box.innerHTML = parts.join('<br>');
+  box.classList.toggle('hidden', !parts.length);
+}
+setInterval(() => { if (!$('storeNotice').classList.contains('hidden')) showStoreNotice(); }, 5000);
+$('storeNotice').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-k]');
+  if (!b) return;
+  const k = b.dataset.k;
+  if (b.classList.contains('store-open')) { const id = await storeTab(k); chrome.tabs.update(id, { active: true }); return; }
+  storeCool[k] = 0; showStoreNotice(); startLookup();
+});
+function coolStore(kind) {
+  storeStrikes[kind] = (storeStrikes[kind] || 0) + 1;
+  const mins = Math.min(10, Math.pow(2, storeStrikes[kind] - 1));         // 1, 2, 4, 8, 10 min
+  storeCool[kind] = Date.now() + mins * 60000;
+  storeSlow[kind] = Math.min(8, (storeSlow[kind] || 1) * 2); storeOk[kind] = 0;
+  log(STORES[kind].label + ' asked for a check – carrying on without it, trying again in ' + mins + ' min (and going slower with it).', 'err');
+  showStoreNotice();
+  setTimeout(() => { showStoreNotice(); startLookup(); }, mins * 60000 + 1500);
+}
 // Be polite to the shops: whatever the number of parallel look-ups, each shop gets at most one request
 // every storeGapMs. After a check page the gap doubles for that shop (up to 8x) and slowly comes back.
 const storeNext = {}, storeSlow = {}, storeOk = {};
@@ -215,8 +251,13 @@ async function storeTab(kind) {
 async function storeCall(kind, fn, args) {
   const cfg = STORES[kind];
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (storeBlocked[kind]) await storeBlocked[kind];          // another lookup is waiting for you to solve a check
+    if (storeCooling(kind)) return { found: false, paused: true, label: cfg.label, error: cfg.label + ' paused (check page)' };
     const tabId = await storeTab(kind);
+    // first request after a pause: reload the shop's page in the background so its check can run
+    if (storeStrikes[kind] && !storeCooling(kind) && !storeReloading[kind]) {
+      storeReloading[kind] = (async () => { await chrome.tabs.update(tabId, { url: cfg.home }); await waitComplete(tabId); await sleep(3000); })();
+      try { await storeReloading[kind]; } finally { setTimeout(() => { storeReloading[kind] = null; }, 20000); }
+    } else if (storeReloading[kind]) await storeReloading[kind];
     await storeTurn(kind);
     const res = await exec(tabId, ['core/rules.js', 'core/stores.js'], async (f, argv) => {
       try { return await CSB_STORES[f].apply(null, argv); } catch (e) { return { found: false, error: String(e && e.message || e) }; }
@@ -229,18 +270,10 @@ async function storeCall(kind, fn, args) {
       continue;
     }
     if (res && res.blocked) {
-      if (storeBlocked[kind]) { const go = await storeBlocked[kind]; if (!go) return Object.assign(res, { error: 'Stopped' }); continue; }
-      await chrome.tabs.update(tabId, { active: true });
-      storeSlow[kind] = Math.min(8, (storeSlow[kind] || 1) * 2); storeOk[kind] = 0;
-      log(cfg.label + ' asked for a check – the bot will now go ' + storeSlow[kind] + 'x slower with ' + cfg.label + ' for a while.', 'err');
-      storeBlocked[kind] = pause(cfg.label + ' is showing a check page (or blocked the request). Solve it in that tab, then press Continue.' +
-        (S.parallel > 1 ? ' Tip: set fewer parallel look-ups in Settings if this keeps happening.' : ''));
-      const go = await storeBlocked[kind];
-      storeBlocked[kind] = null;
-      if (!go) return Object.assign(res, { error: 'Stopped' });
-      continue;
+      if (!storeCooling(kind)) coolStore(kind);
+      return { found: false, paused: true, label: cfg.label, error: cfg.label + ' paused (check page)' };
     }
-    if (res && !res.error) storeWasFine(kind);
+    if (res && !res.error) { storeWasFine(kind); if (storeStrikes[kind]) { storeStrikes[kind] = 0; log(cfg.label + ' is answering again.', 'ok'); showStoreNotice(); } }
     return res || { found: false, error: 'No answer' };
   }
   return { found: false, error: cfg.label + ' kept blocking requests' };
@@ -273,7 +306,7 @@ async function lookupPrices(barcode, nameHint) {
   if (priceInFlight.has(key)) { cacheHits++; return priceInFlight.get(key).then((x) => JSON.parse(JSON.stringify(x))); }
   const p = lookupPricesLive(barcode, nameHint).then((res) => {
     // only remember real answers (not blocked pages / errors)
-    const ok = (x) => x && (x.found || (!x.error && !x.blocked));
+    const ok = (x) => x && (x.found || (!x.error && !x.blocked && !x.paused));
     if (ok(res.ww) && ok(res.coles)) { priceCache.set(key, { at: Date.now(), ww: res.ww, coles: res.coles, highest: res.highest }); savePriceCache(); }
     return res;
   }).finally(() => priceInFlight.delete(key));
@@ -485,6 +518,7 @@ function downloadFailed(rows, prefix, sheet) {
 
 function storeCell(s) {
   if (!s) return '<span class="muted">—</span>';
+  if (s.paused) return '<span class="muted" title="' + esc(s.label || 'This shop') + ' asked for a check – the bot will ask again by itself">waiting – will retry…</span>';
   if (s.error && !s.found) return '<span class="pill bad" title="' + esc(s.error) + '">error</span>';
   if (!s.found) return '<span class="muted">not found</span>';
   const special = s.onSpecial && s.now && s.regular && s.now < s.regular ? '<span class="special"> special now ' + m(s.now) + '</span>' : '';
@@ -563,7 +597,7 @@ function rowHTML(r, i) {
   return '<tr data-i="' + i + '" class="' + (pos ? 'in-pos' : '') + '">' +
     (pos ? '<td><input type="checkbox" class="apply" title="Save the new price / name to PosPort" ' + (r.apply ? 'checked' : '') + '></td>'
          : '<td><input type="checkbox" class="use" title="Create this item" ' + (r.use !== false ? 'checked' : '') + '></td>') +
-    '<td><input type="text" class="bcedit" inputmode="numeric" value="' + esc(r.barcode || '') + '" placeholder="barcode" title="Wrong barcode? Change it here – the row is looked up again">' + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
+    '<td><input type="text" class="bcedit" inputmode="numeric" value="' + esc(r.barcode || '') + '" placeholder="barcode" title="Wrong barcode? Change it here – the row is looked up again">' + (r.copies > 1 ? '<span class="sub">×' + r.copies + ' in this sheet</span>' : '') + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
     '<td>' + (r.status === 'waiting' ? '<span class="muted">…</span>' : storeCell(r.ww)) + '</td><td>' + (r.status === 'waiting' ? '' : storeCell(r.coles)) + '</td>' +
     '<td class="invcell">' + (r.status === 'waiting' ? '' : invoiceCellHTML(r, pos ? (r.newPrice || r.pos.price) : r.price)) + '</td>' +
     '<td class="num">' + m(r.highest) + '</td>' +
@@ -593,7 +627,7 @@ function groupHeadHTML(f) {
   return '<tr class="fhead' + (f.open ? ' open' : '') + '" data-f="' + esc(f.id) + '"><td colspan="10">' +
     '<div class="fhead-in"><button class="fx tog" title="Show / hide this file">' + (f.open ? '▾' : '▸') + '</button>' +
     '<b class="fname">' + esc(f.name) + '</b>' +
-    '<span class="fmeta">' + st.n + ' items · ' + (st.done < st.n ? '<span class="fbar"><i style="width:' + pct + '%"></i></span> looking up ' + st.done + '/' + st.n :
+    '<span class="fmeta">' + st.n + ' items' + (f.repeats && f.repeats.length ? ' <span class="muted" title="Same barcode more than once in the sheet: ' + esc(Array.from(new Set(f.repeats)).join(', ')) + '">(+' + f.repeats.length + ' repeat' + (f.repeats.length > 1 ? 's' : '') + ')</span>' : '') + ' · ' + (st.done < st.n ? '<span class="fbar"><i style="width:' + pct + '%"></i></span> looking up ' + st.done + '/' + st.n :
       '<span class="pill ok">looked up</span>') +
     ' · <b>' + st.nw + '</b> new' + (st.made ? ' (' + st.made + ' created)' : '') + ' · <b>' + st.ps + '</b> in PosPort' + (st.flag ? ' · <span class="pill bad">' + st.flag + ' flagged</span>' : '') +
     (st.attn ? ' · <span class="pill warn">' + st.attn + ' to check</span>' : '') + '</span>' +
@@ -777,22 +811,27 @@ function autoColumns(rows, roles, picksIn) {
 
 function itemsFromSheet(rows, picks, fileId, seen) {
   const ac = autoColumns(rows, ITEM_ROLES, picks);
-  const out = [];
-  ac.body.forEach((r) => {
+  const out = [], byKey = new Map(), repeats = [];
+  ac.body.forEach((r, ri) => {
     const x = {};
     ac.picks.forEach((role, i) => { if (role !== '_') x[role] = r[i]; });
     const barcode = R.cleanBarcode(x.barcode);
     const name = String(x.name || '').trim(), hint = String(x.hint || '').trim();
     if (!barcode && !name && !hint) return;
     const key = barcode || (name || hint).toLowerCase();
-    if (seen.has(key)) return;
+    if (seen.has(key)) {          // the same barcode twice in one sheet: one row, but say so
+      const first = byKey.get(key);
+      if (first) first.copies = (first.copies || 1) + 1;
+      repeats.push(barcode || name || hint);
+      return;
+    }
     seen.add(key);
     const price = R.parseMoney(x.price);
     const it = { barcode, inName: name, hint, name: '', tname: '', category: String(x.category || '').trim(), overridePrice: price, price, status: 'waiting', use: true, fileId };
     setNames(it, name, '');
-    out.push(it);
+    out.push(it); byKey.set(key, it);
   });
-  return { items: out, picks: ac.picks };
+  return { items: out, picks: ac.picks, repeats };
 }
 
 $('addFile').addEventListener('change', async (e) => {
@@ -837,10 +876,10 @@ $('addFile').addEventListener('change', async (e) => {
     const raw = await readSheet(f);
     const res = itemsFromSheet(raw, null, id, seen);
     if (!res.items.length) { log(f.name + ': no barcodes or names found – use "Columns…" after loading to pick them.', 'err'); }
-    state.files.push({ id, name: f.name, open: !anyOpen && first, raw: raw.slice(0, 5000), picks: res.picks });
+    state.files.push({ id, name: f.name, open: !anyOpen && first, raw: raw.slice(0, 5000), picks: res.picks, repeats: res.repeats });
     state.add.push(...res.items);
     if (!res.items.length) state.add.push({ barcode: '', inName: '(no rows read)', hint: '', name: '', tname: '', status: 'not found', use: false, fileId: id, note: 'Click "Columns…" on this file' });
-    log('Loaded ' + res.items.length + ' items from ' + f.name);
+    log('Loaded ' + res.items.length + ' items from ' + f.name + (res.repeats.length ? ' (' + res.repeats.length + ' rows were the same barcode again: ' + Array.from(new Set(res.repeats)).join(', ') + ' – shown once, marked ×2)' : ''));
     first = false;
   }
   renderAdd(); saveState();
@@ -864,7 +903,7 @@ async function fileAction(fid, act) {
     const seen = new Set();
     const res = itemsFromSheet(f.raw, mapped, fid, seen);
     state.add = state.add.filter((r) => (r.fileId || 'old') !== fid).concat(res.items);
-    f.picks = mapped; f.open = true;
+    f.picks = mapped; f.open = true; f.repeats = res.repeats;
     renderAdd(); saveState(); startLookup(); return;
   }
   if (act === 'tick') { rows.forEach((r) => { if (r.pos && r.chk && r.chk.flagged && r.newPrice && r.updated !== true) r.apply = true; }); f.open = true; renderAdd(); saveState(); return; }
@@ -874,8 +913,8 @@ async function fileAction(fid, act) {
   if (act === 'export') return exportItems(rows, f.name.replace(/\.[^.]+$/, ''));
   if (act === 'tickets') {
     const list = rows.filter((r) => r.pos || (r.name && r.price && r.status !== 'not found' && r.use !== false)).map((r) => r.pos
-      ? { full: r.newName || r.pos.name, name: r.tname || ticketNameOf(r.newName || r.pos.name, ''), price: r.updated === true ? r.pos.price : (r.pos.price), barcode: r.barcode }
-      : { full: r.name, name: r.tname || ticketNameOf(r.name, ''), price: r.price, barcode: r.barcode });
+      ? { full: r.newName || r.pos.name, name: r.tname || ticketNameOf(r.newName || r.pos.name, ''), price: r.updated === true ? r.pos.price : (r.pos.price), barcode: r.barcode, qty: r.copies || 1 }
+      : { full: r.name, name: r.tname || ticketNameOf(r.name, ''), price: r.price, barcode: r.barcode, qty: r.copies || 1 });
     if (!list.length) { log('Nothing in this file has a name and price yet.', 'err'); return; }
     addTickets(list);
     showTab('tickets');
@@ -1072,6 +1111,7 @@ async function startLookup(again) {
     // Every file moves forward at the same time: every other look-up goes to the file you have open,
     // the rest take turns across all the other files.
     let turn = 0, rot = 0;
+    const caught = new Set();
     const startedAt = Date.now(), hits0 = cacheHits;
     const next = () => {
       if (lookupStop) return null;
@@ -1084,13 +1124,15 @@ async function startLookup(again) {
         const fid = ids[rot++ % ids.length];
         return state.add.find((x) => waiting(x) && (x.fileId || 'old') === fid);
       };
-      const r = (turn++ % 2 === 0 ? (fromOpen() || fromOthers()) : (fromOthers() || fromOpen())) || state.add.find(waiting);
-      if (r) { tried.add(r); r.looking = true; r.relook = false; }
+      let r = (turn++ % 2 === 0 ? (fromOpen() || fromOthers()) : (fromOthers() || fromOpen())) || state.add.find(waiting);
+      // nothing new to look up: fill in shops that were paused earlier (if they are answering again)
+      if (!r) r = state.add.find((x) => x.storePending && x.storePending.length && !x.looking && !caught.has(x) && x.storePending.every((k) => !storeCooling(k)));
+      if (r) { if (!waiting(r)) { caught.add(r); r.catchUp = true; } tried.add(r); r.looking = true; r.relook = false; }
       return r;
     };
     await runPool(S.parallel || 3, next, async (r) => {
       n++;
-      try { await lookupOne(r); } catch (e) { r.status = 'error'; r.note = String(e.message || e); }
+      try { if (r.catchUp) { r.catchUp = false; await storeCatchUp(r); } else await lookupOne(r); } catch (e) { r.status = 'error'; r.note = String(e.message || e); }
       r.looking = false;
       refreshRow(r); saveState();
     });
@@ -1128,6 +1170,27 @@ function changeBarcode(r, value) {
   replaceRow(r); saveState(); startLookup();
 }
 
+// A shop was paused when this row was looked up: ask that shop again now and update the prices.
+async function storeCatchUp(r) {
+  const name = (r.ww && r.ww.found && r.ww.name) || (r.coles && r.coles.found && r.coles.name) || r.inName || r.hint || r.name || '';
+  for (const k of (r.storePending || []).slice()) {
+    const fn = k === 'ww' ? 'wwLookup' : 'colesLookup';
+    let x = await storeCall(k, fn, [r.barcode, name]);
+    if (x && x.paused) return false;
+    if (!(x && x.found) && name && r.barcode) x = await storeCall(k, fn, ['', name]);
+    if (x && x.paused) return false;
+    r[k] = x;
+    r.storePending = r.storePending.filter((z) => z !== k);
+  }
+  r.highest = R.highestPrice(r.ww && r.ww.found ? r.ww.regular : null, r.coles && r.coles.found ? r.coles.regular : null);
+  if (r.pos) { r.chk = R.checkExistingPrice(r.pos.price, r.highest, S); if (!r.apply && r.chk.flagged) r.newPrice = r.chk.suggested; }
+  else if (!r.priceEdited && !r.overridePrice && r.status !== 'created') r.price = priceFor(r);
+  if (r.status === 'not found' && r.highest) { r.status = 'check'; r.note = 'price found on the second try – please check'; }
+  const key = priceKey(r.barcode, r.inName || r.hint);
+  if (key !== 'n:') { priceCache.set(key, { at: Date.now(), ww: r.ww, coles: r.coles, highest: r.highest }); savePriceCache(); }
+  return true;
+}
+
 async function lookupOne(r) {
   let res = await lookupPrices(r.barcode, r.inName || r.hint);
   r.net = null;
@@ -1141,6 +1204,7 @@ async function lookupOne(r) {
     }
   }
   r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
+  r.storePending = ['ww', 'coles'].filter((k) => res[k] && res[k].paused);      // that shop was paused: ask it again later
   const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
   // a line from a Woolworths / Coles invoice has no barcode: take it from the shop's product
   if (!r.barcode && src && src.barcode && strongMatch(src)) { r.barcode = R.cleanBarcode(src.barcode); r.barcodeFrom = src === res.ww ? 'Woolworths' : 'Coles'; }
@@ -2030,7 +2094,7 @@ function addTickets(items, quiet) {
     const dup = state.tickets.find((t) => (t.full || t.name).toLowerCase() === full.toLowerCase());
     if (dup) { if (it.price) dup.price = it.price; if (it.barcode && !dup.barcode) dup.barcode = it.barcode; return; }
     const short = it.full ? it.name : ($('tkShorten').checked ? ticketNameOf(full, '') : full);
-    state.tickets.push({ full, name: short, price: it.price || null, was: it.was || null, barcode: it.barcode || '', size: it.size || sizeFromName(full), qty: 1, use: true });
+    state.tickets.push({ full, name: short, price: it.price || null, was: it.was || null, barcode: it.barcode || '', size: it.size || sizeFromName(full), qty: it.qty || 1, use: true });
     n++;
   });
   if (quiet) return;

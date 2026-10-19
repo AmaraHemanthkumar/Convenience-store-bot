@@ -23,6 +23,7 @@ COLES = {"pageProps": {"searchResults": {"results": [{
     "pricing": {"now": 4.5, "was": 0}}]}}}
 
 
+BLOCK = {"coles": False}
 VITASOY = {"Products": [{"Products": [{
     "Stockcode": 789, "Name": "Vitasoy Oat Milky Long Life Milk Uht", "DisplayName": "Vitasoy Oat Milky Long Life Milk Uht 1l",
     "PackageSize": "1l", "Barcode": "9310320000000", "Price": 2.5, "WasPrice": 3.0, "IsOnSpecial": True,
@@ -44,7 +45,8 @@ def ww_answer(route):
 def setup_routes(ctx):
     ctx.route("https://www.woolworths.com.au/apis/**", ww_answer)
     ctx.route("https://www.woolworths.com.au/", lambda r: r.fulfill(body="<html>ww</html>", content_type="text/html"))
-    ctx.route("https://www.coles.com.au/_next/**", lambda r: r.fulfill(json=COLES))
+    ctx.route("https://www.coles.com.au/search/**", lambda r: r.fulfill(body="<html>Pardon Our Interruption</html>", content_type="text/html"))
+    ctx.route("https://www.coles.com.au/_next/**", lambda r: r.fulfill(body="<html>Pardon Our Interruption</html>", content_type="text/html") if BLOCK["coles"] else r.fulfill(json=COLES))
     ctx.route("https://www.coles.com.au/", lambda r: r.fulfill(body=COLES_HOME, content_type="text/html"))
     ctx.route("https://manager.posport.com.au/**", lambda r: r.fulfill(body=MOCK, content_type="text/html"))
 
@@ -300,6 +302,25 @@ def main():
         page.click("#chkScan")
         wait_until(page, lambda: "items ·" in page.inner_text("#chkScanInfo"))
         print("scan:", page.inner_text("#chkScanInfo"))
+        # Coles shows a check page: the bot keeps going with Woolworths, does not stop or jump to the Coles tab,
+        # and fills in the Coles price by itself once Coles answers again
+        page.click("[data-tab=add]")
+        BLOCK["coles"] = True
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.fill("#addScan", "9300682077777"); page.press("#addScan", "Enter")
+        wait_until(page, lambda: "carrying on without it" in page.inner_text("#log"), 60000)
+        wait_until(page, lambda: "Done:" in page.inner_text("#log"), 60000)
+        assert page.locator("#banner.hidden").count() == 1, "the bot stopped with a banner"
+        assert not page.locator("#storeNotice").is_hidden()
+        print("coles paused:", " ".join(page.inner_text("#storeNotice").split())[:160])
+        row = page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682077777']")).first
+        assert "will retry" in row.inner_text(), row.inner_text()
+        BLOCK["coles"] = False
+        page.click("#storeNotice .store-now")
+        wait_until(page, lambda: "Coles is answering again" in page.inner_text("#log"), 60000)
+        wait_until(page, lambda: "$4.50" in page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682077777']")).first.inner_text(), 60000)
+        print("coles filled in later:", " ".join(row.inner_text().split())[:140])
+
         # Several files at once: every file moves forward together (not one file after the other)
         page.click("[data-tab=add]")
         many = []
@@ -328,7 +349,7 @@ def main():
         wait_until(page, lambda: all("looked up" in h for h in heads()), 120000)
 
         # A file with items that are already in another file still shows ALL its items; loading it again replaces it
-        wbo = Workbook(); wso = wbo.active; wso.append(["Barcode"]); wso.append(["9300682012345"]); wso.append(["9300605094703"]); wso.append(["9300000000031"])
+        wbo = Workbook(); wso = wbo.active; wso.append(["Barcode"]); wso.append(["9300682012345"]); wso.append(["9300605094703"]); wso.append(["9300000000031"]); wso.append(["9300682012345"])
         po = pathlib.Path(tempfile.mkdtemp()) / "overlap.xlsx"; wbo.save(po)
         page.click("[data-tab=add]")
         for _ in range(2):
@@ -336,7 +357,7 @@ def main():
             wait_until(page, lambda: any("overlap.xlsx" in h and "looked up" in h for h in page.locator("#addTable tr.fhead").all_inner_texts()), 120000)
         oh = [h for h in page.locator("#addTable tr.fhead").all_inner_texts() if "overlap.xlsx" in h]
         print("overlap file:", [" ".join(h.split())[:70] for h in oh])
-        assert len(oh) == 1 and "3 items" in oh[0], oh
+        assert len(oh) == 1 and "3 items (+1 repeat)" in " ".join(oh[0].split()), oh
 
         # Tickets for a whole category (from the PosPort item list)
         page.click("[data-tab=tickets]")
