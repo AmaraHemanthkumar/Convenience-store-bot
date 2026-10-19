@@ -39,6 +39,7 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
    - **Gentle on the shops:** however many look-ups run at once, each shop gets at most one request every 0.7 s (*Gap between requests* in Settings). If a shop shows a check page, the bot goes twice as slow with that shop (up to 8x) and speeds back up after a while.
    - **Price memory:** a product that is on several invoices or sheets is looked up only once. The answer is kept for 12 hours, even after closing the bot. **Look up again** clears it and asks the shops fresh.
    - **Look-ups run in parallel:** Woolworths and Coles are asked at the same time, and 3 items are looked up at once. You can set 1–6 in Settings. If the shops start showing "are you a robot" pages, lower it.
+   - **Every file shows all its items**, even ones that are also in another file, so you can fix prices and names from any sheet. Repeats come from price memory instantly. **Create** makes each product only once, and **Save** changes each PosPort item only once. A saved change shows on that item in every file. Loading a file with the same name again replaces its old row.
    - **Each file row has its own buttons:** Create N new · Tick flagged · Save N changes · Tickets (send the whole file to the print list) · Excel · ✕ remove.
 
    For every barcode the bot:

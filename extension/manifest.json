@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Convenience Store Bot",
-  "version": "2.8.1",
+  "version": "2.8.2",
   "description": "Adds new items to PosPort, checks prices against Woolworths and Coles, and prints shelf labels.",
   "permissions": ["tabs", "scripting", "storage", "unlimitedStorage"],
   "host_permissions": [

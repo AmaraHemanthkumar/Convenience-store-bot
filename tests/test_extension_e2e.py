@@ -327,6 +327,17 @@ def main():
         print("files started together:", [" ".join(h.split())[:60] for h in heads()])
         wait_until(page, lambda: all("looked up" in h for h in heads()), 120000)
 
+        # A file with items that are already in another file still shows ALL its items; loading it again replaces it
+        wbo = Workbook(); wso = wbo.active; wso.append(["Barcode"]); wso.append(["9300682012345"]); wso.append(["9300605094703"]); wso.append(["9300000000031"])
+        po = pathlib.Path(tempfile.mkdtemp()) / "overlap.xlsx"; wbo.save(po)
+        page.click("[data-tab=add]")
+        for _ in range(2):
+            page.set_input_files("#addFile", str(po))
+            wait_until(page, lambda: any("overlap.xlsx" in h and "looked up" in h for h in page.locator("#addTable tr.fhead").all_inner_texts()), 120000)
+        oh = [h for h in page.locator("#addTable tr.fhead").all_inner_texts() if "overlap.xlsx" in h]
+        print("overlap file:", [" ".join(h.split())[:70] for h in oh])
+        assert len(oh) == 1 and "3 items" in oh[0], oh
+
         # Tickets for a whole category (from the PosPort item list)
         page.click("[data-tab=tickets]")
         opts = page.locator("#tkCat option").all_inner_texts()

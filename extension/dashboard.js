@@ -800,10 +800,19 @@ $('addFile').addEventListener('change', async (e) => {
   e.target.value = '';
   if (!files.length) return;
   ensureFiles();
-  const seen = new Set(state.add.map((r) => r.barcode || (r.inName || '').toLowerCase()));
   const anyOpen = state.files.some((f) => f.open);
   let first = true;
   for (const f of files) {
+    const seen = new Set();      // a repeat is only skipped inside the same file – every file shows all its items
+    // the same file loaded again replaces its old row (items already created / saved are kept as they are)
+    const again = state.files.find((x) => x.name === f.name && !x.invoice);
+    if (again) {
+      const keep = (r) => r.status === 'created' || r.updated === true;
+      const before = state.add.length;
+      state.add = state.add.filter((r) => (r.fileId || 'old') !== again.id || keep(r));
+      if (!state.add.some((r) => (r.fileId || 'old') === again.id)) state.files = state.files.filter((x) => x !== again);
+      log(f.name + ' loaded again – replaced the old copy (' + (before - state.add.length) + ' rows).');
+    }
     const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     if (/\.pdf$/i.test(f.name)) {
       let inv;
@@ -852,7 +861,7 @@ async function fileAction(fid, act) {
   if (act === 'cols') {
     const mapped = await mapColumnsPicks(f.name, f.raw, ITEM_ROLES);
     if (!mapped) return;
-    const seen = new Set(state.add.filter((r) => (r.fileId || 'old') !== fid).map((r) => r.barcode || (r.inName || '').toLowerCase()));
+    const seen = new Set();
     const res = itemsFromSheet(f.raw, mapped, fid, seen);
     state.add = state.add.filter((r) => (r.fileId || 'old') !== fid).concat(res.items);
     f.picks = mapped; f.open = true;
@@ -1260,8 +1269,13 @@ $('addUpdate').addEventListener('click', () => runPosUpdates(null));
 
 // Save ticked changes (new price and/or new name) for items already in PosPort. fid = only that file.
 async function runPosUpdates(fid) {
+  const savedOnce = new Set();
   const todo = state.add.filter((r) => r.pos && r.apply && (!fid || (r.fileId || 'old') === fid) &&
-    (r.newPrice > 0 || (r.newName && r.newName !== r.pos.name)));
+    (r.newPrice > 0 || (r.newName && r.newName !== r.pos.name))).filter((r) => {
+    const k = nameKey(r.pos.name);
+    if (savedOnce.has(k)) { r.apply = false; return false; }     // same PosPort item ticked in two files: save it once
+    savedOnce.add(k); return true;
+  });
   if (!todo.length) { log('Tick the PosPort items to change and give them a new price or name.', 'err'); return; }
   const line = (r) => (r.newName && r.newName !== r.pos.name ? r.pos.name + ' → "' + r.newName + '"' : r.pos.name) +
     (r.newPrice > 0 && r.newPrice !== r.pos.price ? ': ' + m(r.pos.price) + ' → ' + m(r.newPrice) : '');
@@ -1280,6 +1294,14 @@ async function runPosUpdates(fid) {
       r.updated = !!(res && res.ok);
       r.note = r.updated ? 'was ' + m(r.pos.price) + (fields.name ? ' / "' + r.pos.name + '"' : '') + (res.checked ? ' · checked in PosPort' : ' · saved, but could not double-check – look in PosPort') : (res && res.error) || 'unknown error';
       if (r.updated) {
+        const oldKey = nameKey(r.pos.name);
+        // the same PosPort item in other files: show the saved price / name there too
+        state.add.forEach((x) => {
+          if (x === r || !x.pos || nameKey(x.pos.name) !== oldKey) return;
+          if (fields.price) x.pos.price = fields.price;
+          if (fields.name) { x.pos.name = fields.name; x.newName = null; }
+          x.newPrice = null; x.apply = false; x.chk = R.checkExistingPrice(x.pos.price, x.highest, S);
+        });
         const c = state.catalogue.find((x) => x.name === r.pos.name);
         if (fields.price) { r.pos.price = fields.price; if (c) c.price = fields.price; }
         if (fields.name) { if (c) c.name = fields.name; r.pos.name = fields.name; r.newName = null; }
@@ -1327,7 +1349,15 @@ async function runCreate(retry, fid) {
     try { moved = await recheckPos(true); } finally { setBusy(false); }
     if (moved && !confirm(moved + ' of these items are already in PosPort (added since the bot last looked) and were moved to "Already in PosPort". Create the rest now?')) return;
   }
-  const todo = state.add.filter((r) => inFile(r) && !r.pos && r.use !== false && (r.status === 'ready' || r.status === 'check') && r.name && r.price > 0 && r.category);
+  const sameItem = (r) => r.barcode ? 'b:' + R.cleanBarcode(r.barcode).replace(/^0+/, '') : 'n:' + nameKey(r.name);
+  const doneKeys = new Set(state.add.filter((r) => r.status === 'created' || r.status === 'filled').map(sameItem));
+  const todoKeys = new Set();
+  const todo = state.add.filter((r) => {
+    if (!(inFile(r) && !r.pos && r.use !== false && (r.status === 'ready' || r.status === 'check') && r.name && r.price > 0 && r.category)) return false;
+    const k = sameItem(r);
+    if (doneKeys.has(k) || todoKeys.has(k)) { r.status = 'created'; r.note = 'same item as in another file – created once'; return false; }
+    todoKeys.add(k); return true;
+  });
   const skipped = state.add.filter((r) => inFile(r) && !r.pos && r.use !== false && !todo.includes(r) && !['created', 'filled', 'exists', 'in PosPort'].includes(r.status)).length;
   if (!todo.length) { log('Nothing ready to create (need name, price and category).', 'err'); return; }
   const long = todo.filter((r) => r.name.length > S.nameMaxLength).length;
@@ -1391,6 +1421,9 @@ async function runCreate(retry, fid) {
       }
       const made = batch.filter((it) => it.status === 'filled');
       made.forEach((it) => { it.status = 'created'; it.note = ''; });
+      // the same product in other files is now in PosPort too
+      const madeKeys = new Set(made.map(sameItem));
+      state.add.forEach((x) => { if (!made.includes(x) && !x.pos && x.status !== 'created' && madeKeys.has(sameItem(x))) { x.status = 'created'; x.note = 'created from another file'; } });
       if (made.length) {
         state.catalogue.push(...made.map((it) => ({ name: it.name, price: it.price, barcode: it.barcode })));
         toPrintList(made.map((it) => ({ full: it.name, name: it.tname || ticketNameOf(it.name, ''), price: it.price, barcode: it.barcode })), 'new items');
@@ -2446,7 +2479,7 @@ $('buySend').addEventListener('click', () => {
   ensureFiles();
   const groups = new Map();
   list.forEach((r) => { const k = r.file || 'Buying list'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
-  const seen = new Set(state.add.filter((x) => x.status !== 'created').map((x) => x.barcode).filter(Boolean));
+  const seen = new Set();
   let n = 0;
   groups.forEach((rows, label) => {
     const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
