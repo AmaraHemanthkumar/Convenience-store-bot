@@ -265,7 +265,20 @@ def main():
         page.wait_for_timeout(3000)
         txt = page.inner_text("#addTable")
         print("invoice rows:", txt[txt.find("Example Wholesale"):][:600].replace("\n", " | "))
-        assert "margin" in txt and "cost $" in txt, txt[-800:]
+        assert "% margin at" in txt and "each" in txt, txt[-800:]
+        # Invoice column: one-click price from the invoice
+        r = page.locator("#addTable tr[data-i]").filter(has=page.locator(".inv-use")).first
+        btn = r.locator(".inv-use").first
+        want = btn.get_attribute("data-p")
+        btn.click()
+        r2 = page.locator("#addTable tr[data-i]").filter(has=page.locator(".inv-use")).first
+        got = (r2.locator("input.newprice").input_value() if r2.locator("input.newprice").count() else r2.locator("input.price").input_value())
+        print("invoice button price:", want, "->", got)
+        assert abs(float(got) - float(want)) < 0.005, (want, got)
+        # new prices from invoice cost + margin
+        page.select_option("#addBasis", "invoice")
+        wait_until(page, lambda: "New prices now: invoice cost + margin" in page.inner_text("#log"))
+        page.select_option("#addBasis", "shops")
         page.click("[data-tab=buy]")
 
         # Backup (items only on the mock): Excel with a Contents sheet + a JSON file

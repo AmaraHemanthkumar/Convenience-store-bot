@@ -288,7 +288,6 @@ async function lookupPricesLive(barcode, nameHint) {
   ]);
   // Coles often can't find a barcode: try again with the Woolworths product name
   if (!(coles && coles.found) && ww && ww.found && ww.name !== nameHint) coles = await storeCall('coles', 'colesLookup', ['', ww.name]);
-  await sleep(S.delayMs);
   const highest = R.highestPrice(ww && ww.found ? ww.regular : null, coles && coles.found ? coles.regular : null);
   return { ww, coles, highest };
 }
@@ -525,6 +524,23 @@ function checkPill(r) {
 const catOptsHTML = (sel) => ['<option value="">— choose —</option>'].concat(categories.map((c) => '<option' + (c === sel ? ' selected' : '') + '>' + esc(c) + '</option>')).join('');
 
 // cost from the supplier invoice and the margin at this price
+// The Invoice column: what you paid per unit, supplier RRP, the margin at our price, and one-click prices
+function invoiceCellHTML(r, price) {
+  const inv = r.inv || invoiceFor(r.barcode, [r.hint, r.inName, r.name]);
+  if (!inv || (!inv.unitCost && !inv.rrp)) return '<span class="muted">–</span>';
+  const mg = price && inv.unitCost ? Math.round((price - inv.unitCost) / price * 100) : null;
+  const low = mg !== null && mg < (S.minMargin || 25);
+  const cp = invCostPrice(inv);
+  const sup = String(inv.supplier || 'Invoice').replace(/ Pty Ltd| Australia| Partners/ig, '');
+  return (inv.unitCost ? '<b>' + m(inv.unitCost) + '</b> <span class="muted">each</span>' : '') +
+    '<span class="sub" title="' + esc(inv.desc || '') + '">' + esc(sup) + ' #' + esc(inv.number || '') + (inv.date ? ' · ' + esc(inv.date) : '') + '</span>' +
+    (inv.rrp ? '<span class="sub">RRP ' + m(inv.rrp) + '</span>' : '') +
+    (mg !== null ? '<span class="sub' + (low ? ' bad-txt' : ' ok-txt') + '">' + mg + '% margin at ' + m(price) + '</span>' : '') +
+    '<div class="inv-btns">' +
+      (cp ? '<button class="fx small inv-use" data-p="' + cp + '" title="Invoice cost + ' + (S.fallbackMargin || 40) + '% (Settings)">' + m(cp) + ' <span class="muted">+' + (S.fallbackMargin || 40) + '%</span></button>' : '') +
+      (inv.rrp ? '<button class="fx small inv-use" data-p="' + inv.rrp + '" title="Supplier RRP">' + m(inv.rrp) + ' <span class="muted">RRP</span></button>' : '') +
+    '</div>';
+}
 function costHTML(r, price) {
   const inv = r.inv || invoiceFor(r.barcode);
   if (!inv || !inv.unitCost) return '';
@@ -549,10 +565,11 @@ function rowHTML(r, i) {
          : '<td><input type="checkbox" class="use" title="Create this item" ' + (r.use !== false ? 'checked' : '') + '></td>') +
     '<td><input type="text" class="bcedit" inputmode="numeric" value="' + esc(r.barcode || '') + '" placeholder="barcode" title="Wrong barcode? Change it here – the row is looked up again">' + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
     '<td>' + (r.status === 'waiting' ? '<span class="muted">…</span>' : storeCell(r.ww)) + '</td><td>' + (r.status === 'waiting' ? '' : storeCell(r.coles)) + '</td>' +
+    '<td class="invcell">' + (r.status === 'waiting' ? '' : invoiceCellHTML(r, pos ? (r.newPrice || r.pos.price) : r.price)) + '</td>' +
     '<td class="num">' + m(r.highest) + '</td>' +
     (pos
-      ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">new price</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–">' + costHTML(r, r.newPrice || r.pos.price) + '</td>'
-      : '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '">' + costHTML(r, r.price) + '</td>') +
+      ? '<td class="num"><span class="sub">PosPort now</span><b>' + m(r.pos.price) + '</b><span class="sub">new price</span><input type="number" step="0.01" class="price newprice" value="' + (r.newPrice ? Number(r.newPrice).toFixed(2) : '') + '" placeholder="–"></td>'
+      : '<td class="num"><input type="number" step="0.01" class="price" value="' + (r.price !== null && r.price !== undefined ? Number(r.price).toFixed(2) : '') + '">' + (r.priceEdited ? '<span class="sub">typed</span>' : priceSource(r, r.price) ? '<span class="sub">' + esc(priceSource(r, r.price)) + '</span>' : '') + '</td>') +
     '<td>' + nameCell + '</td>' +
     '<td>' + (pos ? checkPill(r) : '<select class="cat">' + catOptsHTML(r.category) + '</select>') + '</td>' +
     '<td>' + addStatusPill(r) + '</td></tr>';
@@ -573,7 +590,7 @@ function fileStats(fid) {
 function groupHeadHTML(f) {
   const st = fileStats(f.id);
   const pct = st.n ? Math.round(st.done / st.n * 100) : 100;
-  return '<tr class="fhead' + (f.open ? ' open' : '') + '" data-f="' + esc(f.id) + '"><td colspan="9">' +
+  return '<tr class="fhead' + (f.open ? ' open' : '') + '" data-f="' + esc(f.id) + '"><td colspan="10">' +
     '<div class="fhead-in"><button class="fx tog" title="Show / hide this file">' + (f.open ? '▾' : '▸') + '</button>' +
     '<b class="fname">' + esc(f.name) + '</b>' +
     '<span class="fmeta">' + st.n + ' items · ' + (st.done < st.n ? '<span class="fbar"><i style="width:' + pct + '%"></i></span> looking up ' + st.done + '/' + st.n :
@@ -606,7 +623,7 @@ function renderAdd() {
   $('fAll').textContent = counts.all; $('fNew').textContent = counts.new; $('fPos').textContent = counts.pos; $('fAttn').textContent = counts.attn;
   document.querySelectorAll('#addFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === (state.addFilter || 'all')));
   if (!state.add.length) { t.innerHTML = '<tbody><tr><td class="muted">Choose one or more Excel files, or scan barcodes. Each file appears here as its own row – click it to open the whole sheet.</td></tr></tbody>'; $('addSummary').textContent = ''; refreshButtons(); return; }
-  let html = '<thead><tr><th><input type="checkbox" id="addAll" title="Tick / untick everything shown"></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th class="num">Highest</th><th class="num">Price</th><th>Name</th><th>Category / check</th><th>Status</th></tr></thead>';
+  let html = '<thead><tr><th><input type="checkbox" id="addAll" title="Tick / untick everything shown"></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th>Invoice <span class="muted">(cost each)</span></th><th class="num">Highest</th><th class="num">Price</th><th>Name</th><th>Category / check</th><th>Status</th></tr></thead>';
   state.files.forEach((f) => {
     html += '<tbody class="fgroup" data-f="' + esc(f.id) + '">' + groupHeadHTML(f);
     if (f.open) state.add.forEach((r, i) => { if ((r.fileId || 'old') === f.id && inFilter(r)) html += rowHTML(r, i); });
@@ -728,6 +745,15 @@ $('addTable').addEventListener('click', (e) => {
   const tr = e.target.closest('tr[data-i]');
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
+  const use = e.target.closest('.inv-use');
+  if (use) {      // one-click price from the invoice (cost + margin, or RRP)
+    const p = Number(use.dataset.p);
+    if (r.pos) { r.newPrice = p; r.apply = true; } else { r.price = p; r.priceEdited = true; }
+    replaceRow(r); saveState(); refreshButtons();
+    const fid = r.fileId || 'old', f = state.files.find((x) => x.id === fid), head = $('addTable').querySelector('tr.fhead[data-f="' + CSS.escape(fid) + '"]');
+    if (f && head) head.outerHTML = groupHeadHTML(f);
+    return;
+  }
   if (e.target.classList.contains('maybe-yes')) { markInPos(r, r.maybe); r.maybe = null; }
   else if (e.target.classList.contains('maybe-no')) { r.maybe = null; r.notInPos = true; }
   else return;
@@ -868,6 +894,27 @@ scanBox('addScan', (code) => {
   startLookup();
 });
 
+// ---- what a new price is based on (Prices box): shops, invoice cost, the higher of both, or supplier RRP ----
+const BASIS_TEXT = { shops: 'highest shop price + markup', higher: 'shop price + markup, or invoice cost + margin if that is higher', invoice: 'invoice cost + margin', rrp: 'supplier RRP from the invoice' };
+function invCostPrice(inv) { return inv && inv.unitCost ? R.round2(inv.unitCost * (1 + (S.fallbackMargin || 40) / 100)) : null; }
+function priceFor(r) {
+  const shop = r.highest ? R.newItemPrice(r.highest, S) : null;
+  const cost = invCostPrice(r.inv), rrp = r.inv && r.inv.rrp ? r.inv.rrp : null;
+  switch (S.priceBasis || 'shops') {
+    case 'higher': return shop && cost ? Math.max(shop, cost) : (shop || cost || rrp);
+    case 'invoice': return cost || shop || rrp;
+    case 'rrp': return rrp || shop || cost;
+    default: return shop || rrp || cost;
+  }
+}
+// what the price came from, for the note under the price
+function priceSource(r, p) {
+  if (!p) return '';
+  if (r.highest && p === R.newItemPrice(r.highest, S)) return 'shop + ' + markupText();
+  if (r.inv && p === invCostPrice(r.inv)) return 'cost + ' + (S.fallbackMargin || 40) + '%';
+  if (r.inv && p === r.inv.rrp) return 'supplier RRP';
+  return '';
+}
 function markupText() {
   return (S.markup ? m(S.markup) : '') + (S.markup && S.markupPct ? ' + ' : '') + (S.markupPct ? S.markupPct + '%' : '') || '$0';
 }
@@ -877,8 +924,8 @@ function applyMarkup(newMarkup, newPct) {
   chrome.storage.local.set({ settings: S });
   let n = 0;
   state.add.forEach((r) => {
-    if (r.pos || r.priceEdited || r.overridePrice || !r.highest || r.status === 'created') return;
-    r.price = R.newItemPrice(r.highest, S); n++;
+    if (r.pos || r.priceEdited || r.overridePrice || (!r.highest && !r.inv) || r.status === 'created') return;
+    r.price = priceFor(r); n++;
   });
   $('s_markup').value = S.markup; $('s_markupPct').value = S.markupPct || 0;
   state.add.forEach((r) => { if (r.pos && r.highest) { r.chk = R.checkExistingPrice(r.pos.price, r.highest, S); if (!r.apply) r.newPrice = r.chk.flagged ? r.chk.suggested : r.newPrice; } });
@@ -892,6 +939,17 @@ $('addApplyMarkup').addEventListener('click', () => {
   applyMarkup(R.round2(v), pct);
 });
 $('addMarkup').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addApplyMarkup').click(); });
+$('addInvMargin').addEventListener('change', () => {
+  const v = parseFloat($('addInvMargin').value);
+  if (!isFinite(v) || v < 0) return;
+  S.fallbackMargin = v; $('s_fallbackMargin').value = v;
+  applyMarkup(S.markup, S.markupPct); renderAdd();
+});
+$('addBasis').addEventListener('change', () => {
+  S.priceBasis = $('addBasis').value;
+  applyMarkup(S.markup, S.markupPct);
+  log('New prices now: ' + BASIS_TEXT[S.priceBasis] + '.', 'ok');
+});
 $('addMarkupPct').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addApplyMarkup').click(); });
 $('addRename').addEventListener('click', () => {
   let n = 0;
@@ -1050,12 +1108,9 @@ async function lookupOne(r) {
   else if (!nameSrc && r.inv && !r.inName && !r.nameEdited) { setNames(r, r.inv.name || INV.tidyName(r.inv.desc), ''); r.nameFromInvoice = true; }
   else if (!r.name && r.hint) setNames(r, r.hint, '');
   if (!r.category) r.category = R.guessCategory(nameSrc ? nameSrc.name : (r.inName || r.hint), (res.ww && res.ww.dept) || (r.net && r.net.dept), categories);
-  if (!r.priceEdited) r.price = r.overridePrice || R.newItemPrice(res.highest, S);
-  // not at Woolworths/Coles: price from the supplier invoice (their RRP, or cost + margin)
-  if (!res.highest && r.inv && !r.priceEdited && !r.overridePrice) {
-    r.price = r.inv.rrp || (r.inv.unitCost ? R.round2(r.inv.unitCost * (1 + (S.fallbackMargin || 40) / 100)) : null);
-    r.invPriced = !!r.price;
-  }
+  if (!r.priceEdited) r.price = r.overridePrice || priceFor(r);
+  // not at Woolworths/Coles: the price can only come from the supplier invoice (their RRP, or cost + margin)
+  r.invPriced = !res.highest && !!r.inv && !!r.price && !r.priceEdited && !r.overridePrice;
   const unsure = [res.ww, res.coles].some((x) => x && x.found && x.match && x.match !== 'barcode');
   if (r.barcode && !R.validBarcode(r.barcode)) { r.status = 'not found'; r.note = 'This barcode looks mistyped (check digit is wrong) - please re-scan it.'; }
   else if (!res.highest && r.invPriced) { r.status = 'check'; r.note = 'Not at Woolworths/Coles – name and price from invoice ' + (r.inv.number || '') + (r.inv.rrp ? ' (supplier RRP)' : ' (cost + ' + (S.fallbackMargin || 40) + '%)'); }
@@ -1326,6 +1381,10 @@ function exportItems(list, base) {
     'Coles product': r.coles && r.coles.found ? r.coles.name : '',
     'Coles normal $': r.coles && r.coles.found ? r.coles.regular : '',
     'Coles special $': r.coles && r.coles.found && r.coles.onSpecial ? r.coles.now : '',
+    'Invoice cost each $': r.inv && r.inv.unitCost ? R.round2(r.inv.unitCost) : '',
+    'Invoice RRP $': r.inv && r.inv.rrp ? r.inv.rrp : '',
+    'Invoice': r.inv ? String(r.inv.supplier || '').replace(/ Pty Ltd/i, '') + ' #' + (r.inv.number || '') + ' ' + (r.inv.date || '') : '',
+    'Margin % at our price': r.inv && r.inv.unitCost && (r.pos ? (r.newPrice || r.pos.price) : r.price) ? Math.round(((r.pos ? (r.newPrice || r.pos.price) : r.price) - r.inv.unitCost) / (r.pos ? (r.newPrice || r.pos.price) : r.price) * 100) : '',
     'Highest $': r.highest || '',
     'Our price $': r.pos ? '' : (r.price || ''),
     'In PosPort as': r.pos ? r.pos.name : (r.maybe ? 'maybe: ' + r.maybe.name : ''),
@@ -2590,6 +2649,8 @@ function fillSettings() {
   $('s_abbrevs').value = S.abbrevs || '';
   $('addMarkup').value = Number(S.markup).toFixed(2);
   $('addMarkupPct').value = S.markupPct || 0;
+  $('addBasis').value = S.priceBasis || 'shops';
+  $('addInvMargin').value = S.fallbackMargin || 40;
   R.setAbbreviations(S.abbrevs || '');
   document.querySelectorAll('.lowLbl').forEach((x) => { x.textContent = m(S.flagLow); });
   document.querySelectorAll('.highLbl').forEach((x) => { x.textContent = m(S.flagHigh); });

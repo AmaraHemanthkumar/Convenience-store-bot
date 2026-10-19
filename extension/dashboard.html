@@ -46,6 +46,16 @@
           <div class="row">
             <label class="inline">Markup $ <input type="number" step="0.05" min="0" id="addMarkup" class="small-num"></label>
             <label class="inline">+ <input type="number" step="1" min="0" id="addMarkupPct" class="small-num" title="Percent of the highest supermarket price, e.g. 20 = 20%"> %</label>
+          </div>
+          <div class="row">
+            <label class="inline small-note">New prices from
+              <select id="addBasis">
+                <option value="shops">Shops: highest + markup</option>
+                <option value="higher">Shops, but never below invoice cost + margin</option>
+                <option value="invoice">Invoice cost + margin</option>
+                <option value="rrp">Supplier RRP (when on the invoice)</option>
+              </select></label>
+            <label class="inline small-note">cost + <input type="number" step="1" min="0" id="addInvMargin" class="small-num" title="Margin on the invoice cost"> %</label>
             <button id="addApplyMarkup" class="btn small">Apply</button>
             <button id="addRename" class="btn small" title="Make the names again with the current length and shorthand list">Redo names</button>
           </div>
@@ -271,7 +281,7 @@
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
         <label>Items looked up at the same time (1–6)<input type="number" id="s_parallel" min="1" max="6"></label>
         <label>Gap between requests to the same shop (ms) – bigger = gentler on Woolworths/Coles<input type="number" step="100" min="300" id="s_storeGapMs"></label>
-        <label>Not at Woolworths/Coles: price = invoice cost + (%)<input type="number" id="s_fallbackMargin"></label>
+        <label>Margin on invoice cost (%) – used for "cost + margin" prices and when an item isn't at Woolworths/Coles<input type="number" id="s_fallbackMargin"></label>
         <label>Show cost in red below margin (%)<input type="number" id="s_minMargin"></label>
         <label>Items per Bulk Create page<input type="number" id="s_batchSize"></label>
         <label class="check"><input type="checkbox" id="s_extraBlankRow"> Keep one extra empty row (Bulk Create bug)</label>

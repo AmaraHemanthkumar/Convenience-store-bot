@@ -50,6 +50,8 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
    - asks when it's unsure: *"Already in PosPort as …? Yes, same item / No, it's new"*.
 2. Use the filters (**All · New · Already in PosPort · Needs attention**) and edit anything you like.
    - **Markup $ and Markup %** change all new prices at once: price = highest supermarket price × (1 + %) + $. For example $1.50 + 0% (the default), or $0 + 30%, or $1 + 20%.
+   - **Invoice column** (next to Woolworths and Coles): what you paid for one unit on the newest invoice that has this item, plus the supplier, invoice number and date, the supplier RRP, and the margin at our price (red below your lowest margin). Two buttons set the price in one click: **cost + margin %** or **RRP**. For items already in PosPort, the click goes into the new price and ticks the row, ready for *Save changes*.
+   - **New prices from:** *Shops* (highest + markup, the default) · *Shops, but never below invoice cost + margin* (safest – you never sell under your margin) · *Invoice cost + margin* · *Supplier RRP*. The *cost + %* box next to it sets the margin. The note under each price says where it came from.
    - **Wrong barcode?** Click it in the row, type the right one and press Tab. That row is looked up again by itself.
 3. Save to PosPort:
    - **Create new items** fills Bulk Create (with one spare row). See *If creating fails* below.

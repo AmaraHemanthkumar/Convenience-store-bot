@@ -16,6 +16,7 @@
     shortInPosPort: false, // true = also save the short ticket name in PosPort
     delayMs: 700,          // pause between website actions
     parallel: 3,           // how many items are looked up at the same time (1-6)
+    priceBasis: 'shops',   // new prices from: shops | higher (shops or invoice cost + margin, whichever is higher) | invoice | rrp
     storeGapMs: 700,       // at least this long between two requests to the same shop (be polite to Woolworths/Coles)
     fallbackMargin: 40,    // % on top of invoice cost when Woolworths/Coles don't have the item (and no RRP)
     minMargin: 25,         // margin % below which the cost shows red
