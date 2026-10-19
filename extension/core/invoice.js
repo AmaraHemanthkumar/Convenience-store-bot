@@ -71,11 +71,7 @@
       items.push(it);
     });
     // fees such as "Service Handling Fee  9.00  0.90  9.90" (last number = inc GST)
-    const fees = [];
-    lines.forEach((l) => {
-      const m = String(l).replace(/\s+/g, ' ').trim().match(/^(.*?(?:fee|freight|delivery charge|surcharge|handling)[^0-9]*)\s+(\d+\.\d{2})(?:\s+(\d+\.\d{2}))?\s+(\d+\.\d{2})$/i);
-      if (m && !/total|amount|balance/i.test(m[1])) fees.push({ desc: m[1].trim(), amount: Number(m[4]) });
-    });
+    const fees = feesOf(lines);
     const itemsTotal = items.reduce((a, x) => a + (x.extIncGst || 0), 0);
     return {
       fees, itemsTotal,
@@ -88,29 +84,169 @@
     };
   }
 
-  // PDF -> lines of text, rebuilt from the positions of the words on each page.
-  async function pdfToLines(arrayBuffer) {
+  // PDF -> words with their position on each page (as the page is shown; many invoices are rotated landscape pages)
+  async function pdfToPages(arrayBuffer) {
     const pdfjs = root.pdfjsLib;
     if (!pdfjs) throw new Error('PDF reader not loaded');
     const doc = await pdfjs.getDocument({ data: arrayBuffer }).promise;
-    const lines = [];
+    const pages = [];
     for (let p = 1; p <= doc.numPages; p++) {
       const page = await doc.getPage(p);
-      // use the page as it is shown (many invoices are landscape pages stored rotated)
       const vp = page.getViewport({ scale: 1 });
       const tc = await page.getTextContent();
-      const rows = [];
+      const pieces = [];
       tc.items.forEach((it) => {
         if (!it.str || !it.str.trim()) return;
         const t = pdfjs.Util.transform(vp.transform, it.transform);
-        const x = t[4], y = t[5];                       // y grows downwards here
-        let row = rows.find((r) => Math.abs(r.y - y) < 2.5);
-        if (!row) { row = { y, parts: [] }; rows.push(row); }
-        row.parts.push({ x, s: it.str });
+        pieces.push({ x: t[4], y: t[5], s: it.str.trim(), w: it.width || 0 });   // y grows downwards
       });
-      rows.sort((a, b) => a.y - b.y).forEach((r) => lines.push(r.parts.sort((a, b) => a.x - b.x).map((q) => q.s.trim()).join('  ')));
+      pages.push(pieces);
     }
-    return lines;
+    return pages;
+  }
+  // words -> lines (same height on the page), each line keeps its words with x positions
+  function piecesToRows(pieces, tol) {
+    const rows = [];
+    pieces.slice().sort((a, b) => a.y - b.y).forEach((pc) => {
+      let row = rows.find((r) => Math.abs(r.y - pc.y) < (tol || 2.5));
+      if (!row) { row = { y: pc.y, parts: [] }; rows.push(row); }
+      row.parts.push(pc);
+    });
+    rows.sort((a, b) => a.y - b.y).forEach((r) => {
+      r.parts.sort((a, b) => a.x - b.x);
+      r.text = r.parts.map((q) => q.s).join('  ');
+    });
+    return rows;
+  }
+  async function pdfToLines(arrayBuffer) {
+    const pages = await pdfToPages(arrayBuffer);
+    return [].concat(...pages.map((pc) => piecesToRows(pc).map((r) => r.text)));
+  }
+
+  // ---------- shop-style invoices: Woolworths / Coles online orders and similar ----------
+  // A table with columns like  [Line] Description | Ordered | Supplied/Picked | Price | Amount/Total.
+  // No barcodes, and the numbers often sit a little lower than their description, so rows are matched up
+  // by order on the page, not by exact height.
+  const money = (t) => { const v = String(t).replace(/[$,\s]/g, ''); return /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : null; };
+  const CATEGORY = (t) => t.split(/\s+/).length <= 5 && !/\d/.test(t) && !/^[*%#]/.test(t);
+  const SKIP = /^(product|description|item|line|ordered|supplied|picked|qty|quantity|price|unit price|amount|total charged|supplied items?|substitut\w*|page \d+)/i;
+  const FOOT = /(sub-?total|total|gst|delivery|bag|fee|discount|savings|voucher|balance|paid|payment|refund)/i;
+
+  function findHeader(row) {
+    const col = {};
+    row.parts.forEach((pc) => {
+      const t = pc.s.toLowerCase();
+      if (/^line$/.test(t)) col.line = pc.x;
+      else if (/^(description|product|item description|item)$/.test(t)) col.desc = pc.x;
+      else if (/^(ordered|qty ordered|order qty)$/.test(t)) col.ordered = pc.x;
+      else if (/^(supplied|picked|delivered|qty supplied)$/.test(t)) col.supplied = pc.x;
+      else if (/^(price|unit price|each)$/.test(t)) col.price = pc.x;
+      else if (/^(amount|total charged|total|line total)$/.test(t)) col.amount = pc.x;
+    });
+    return col.ordered !== undefined && col.supplied !== undefined && (col.price !== undefined || col.amount !== undefined) ? col : null;
+  }
+
+  function parseTableInvoice(pages, lines) {
+    const items = [];
+    let col = null;
+    let pending = null;          // description waiting for its numbers
+    let orphan = null;           // numbers waiting for their description (printed slightly higher)
+    const close = (desc, nums, extra) => {
+      const d = desc.replace(/^[*%#]\s*/, '').replace(/\s+/g, ' ').trim();
+      if (!d) return;
+      const ordered = nums.ordered, supplied = nums.supplied !== null ? nums.supplied : nums.ordered;
+      const price = nums.price, amount = nums.amount !== null ? nums.amount : (price !== null && supplied !== null ? Math.round(price * supplied * 100) / 100 : null);
+      const unitCost = supplied > 0 && amount !== null ? amount / supplied : price;
+      items.push({
+        desc: d, marker: (desc.match(/^[*%#]/) || [''])[0], line: extra.line || '',
+        shipped: supplied || 0, short: Math.max(0, (ordered || 0) - (supplied || 0)), barcode: '', code: extra.line || '',
+        rrp: null, status: supplied === 0 ? 'NOT SUPPLIED' : '', soldAs: 'EACH', units: 1, gst: null, promo: '',
+        priceEx: null, levy: 0, priceInc: price, extIncGst: amount, noCharge: supplied > 0 && amount === 0,
+        ordered: ordered || 0, unitsReceived: supplied || 0, unitsShort: Math.max(0, (ordered || 0) - (supplied || 0)),
+        unitCost: unitCost === null || unitCost === undefined ? null : Math.round(unitCost * 10000) / 10000,
+      });
+    };
+    pages.forEach((pieces) => {
+      piecesToRows(pieces).forEach((row) => {
+        const h = findHeader(row);
+        if (h) { col = h; pending = null; orphan = null; return; }
+        if (!col) return;
+        const left = col.ordered - 8;
+        const textParts = row.parts.filter((pc) => pc.x < left);
+        const numParts = row.parts.filter((pc) => pc.x >= left);
+        // numbers: put each one in the nearest column
+        let nums = null;
+        const vals = numParts.map((pc) => ({ x: pc.x, v: money(pc.s), w: pc.w })).filter((q) => q.v !== null);
+        if (vals.length >= 3 && vals.length === numParts.length) {
+          nums = { ordered: null, supplied: null, price: null, amount: null };
+          vals.forEach((q) => {
+            const cx = q.x + q.w / 2;
+            const best = ['ordered', 'supplied', 'price', 'amount'].filter((k) => col[k] !== undefined)
+              .sort((a, b) => Math.abs(col[a] - q.x) + Math.abs(col[a] - cx) - Math.abs(col[b] - q.x) - Math.abs(col[b] - cx))[0];
+            if (nums[best] === null) nums[best] = q.v;
+          });
+        }
+        // text: line number, description, category headings, totals
+        let text = textParts.map((pc) => pc.s).join(' ').replace(/\s+/g, ' ').trim();
+        let lineNo = '';
+        if (col.line !== undefined && textParts.length && /^\d{1,4}$/.test(textParts[0].s) && textParts[0].x < (col.desc || col.ordered) - 4) {
+          lineNo = textParts[0].s; text = textParts.slice(1).map((pc) => pc.s).join(' ').trim();
+        }
+        if (text && (FOOT.test(text) && !lineNo && !/^[*%#]/.test(text) && (!nums || CATEGORY(text)))) { pending = null; orphan = null; return; }
+        if (text && SKIP.test(text) && !lineNo) text = '';
+        if (text) {
+          const isCat = !lineNo && CATEGORY(text) && (col.line !== undefined || !nums);
+          if (isCat) text = '';
+        }
+        if (text) {
+          if (orphan && !nums) { close(text, orphan.nums, { line: lineNo || orphan.line }); orphan = null; return; }
+          // the second line of a long description, printed under the item's numbers
+          const last = items[items.length - 1];
+          if (col.line !== undefined && !lineNo && !nums && !pending && last && last.line && row.y - last.y < 16) { last.desc += ' ' + text; return; }
+          const startsNew = lineNo || col.line === undefined || /^[*%#]/.test(text) || !pending;
+          if (startsNew) pending = { desc: text, line: lineNo };
+          else pending.desc += ' ' + text;          // a long description wrapped onto a second line
+        }
+        if (nums) {
+          if (pending) { close(pending.desc, nums, { line: pending.line }); items[items.length - 1].y = row.y; pending = null; }
+          else orphan = { nums, line: lineNo };
+        }
+      });
+    });
+    const text = lines.join('\n');
+    const pick = (re) => { const m = text.match(re); return m ? m[1].trim() : ''; };
+    const supplier = /woolworths/i.test(text) ? 'Woolworths' : /coles/i.test(text) ? 'Coles' : /aldi/i.test(text) ? 'ALDI' :
+      pick(/^\s*([A-Z][A-Za-z&' ]+(?:Pty Ltd|Limited|Ltd))/m) || 'Invoice';
+    const fees = feesOf(lines);
+    const itemsTotal = items.reduce((a, x) => a + (x.extIncGst || 0), 0);
+    return {
+      kind: 'table', supplier, items, fees, itemsTotal,
+      number: pick(/(?:Invoice|Order)(?:\/Order)?\s*(?:No\.?|Number|#):?\s*([A-Z0-9-]{4,})/i) || pick(/Document No:?\s*(\S+)/i),
+      date: pick(/\bDate:?\s*(\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{4})/i) || pick(/(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*(?:,?\s+\d{4})?)/),
+      total: itemsTotal + fees.reduce((a, f) => a + f.amount, 0),
+      printedTotal: money(pick(/(?:order total|invoice total|total charged|total \(?inc(?:l\.?|luding)? gst\)?|total paid|grand total|^\s*total)\s*:?\s*(\$?[\d,]+\.\d{2})/im)) || null,
+    };
+  }
+
+  function feesOf(lines) {
+    const fees = [];
+    lines.forEach((l) => {
+      const m = String(l).replace(/\s+/g, ' ').trim().match(/^(.*?(?:fee|freight|delivery charge|surcharge|handling)[^0-9$]*)\s+\$?(-?\d+\.\d{2})(?:\s+\$?(-?\d+\.\d{2}))?\s+\$?(-?\d+\.\d{2})$/i) ||
+        String(l).replace(/\s+/g, ' ').trim().match(/^(.*?(?:delivery fee|bag fee|service fee|packaging fee)[^0-9$]*)\s+()()\$?(-?\d+\.\d{2})$/i);
+      if (m && !/total|amount|balance/i.test(m[1])) fees.push({ desc: m[1].trim(), amount: Number(m[4]) });
+    });
+    return fees;
+  }
+
+  // Any supported invoice PDF: wholesale (Distributors-style lines with barcodes) or a shop-style table.
+  async function readPdf(arrayBuffer) {
+    const pages = await pdfToPages(arrayBuffer);
+    const lines = [].concat(...pages.map((pc) => piecesToRows(pc).map((r) => r.text)));
+    const whole = parseInvoice(lines);
+    const table = parseTableInvoice(pages, lines);
+    const inv = table.items.length > whole.items.length ? table : Object.assign(whole, { kind: 'wholesale' });
+    inv.lineCount = lines.length;
+    return inv;
   }
 
   // Supplier short-hand -> readable product name ("NES KIT KAT CHUNKY KING 70G" -> "Nestle Kit Kat Chunky King 70g")
@@ -120,7 +256,7 @@
   const WORDS = { 'CHKN': 'Chicken', 'CHOC': 'Choc', 'S/CREAM': 'Sour Cream', 'S/CRM': 'Sour Cream', 'SW/CHILLI': 'Sweet Chilli',
     'S/F': 'Sugar Free', 'S/FREE': 'Sugar Free', 'C/NUT': 'Coconut', 'CH/BACON': 'Cheese & Bacon', 'R/C': 'Ridge Cut', 'NDL': 'Noodle', 'NDLS': 'Noodles' };
   function tidyName(desc) {
-    let w = String(desc || '').replace(/\*+/g, ' ').replace(/\(\d+\)?$/, '').replace(/\(\d+\s*$/, '').replace(/\s+/g, ' ').trim().split(' ');
+    let w = String(desc || '').replace(/^[*%#]\s*/, '').replace(/\*+/g, ' ').replace(/\(\d+\)?$/, '').replace(/\(\d+\s*$/, '').replace(/\s+/g, ' ').trim().split(' ');
     if (w.length > 1 && Object.prototype.hasOwnProperty.call(PREFIX, w[0].toUpperCase())) {
       const rep = PREFIX[w[0].toUpperCase()];
       w = rep ? [rep].concat(w.slice(1)) : w.slice(1);
@@ -133,6 +269,6 @@
       .replace(/\b(\d+(?:\.\d+)?)(G|Kg|Ml|L|Pk|S)\b/gi, (m, n, u) => n + (u.toLowerCase() === 'l' ? 'L' : u.toLowerCase()));
   }
 
-  root.CSB_INVOICE = { parseLine, parseInvoice, pdfToLines, tidyName };
+  root.CSB_INVOICE = { parseLine, parseInvoice, parseTableInvoice, piecesToRows, pdfToPages, pdfToLines, readPdf, tidyName };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.CSB_INVOICE;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

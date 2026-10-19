@@ -8,6 +8,7 @@
 
   const DEFAULT_SETTINGS = {
     markup: 1.5,           // new items: highest supermarket price + this
+    markupPct: 0,          // ...and/or + this % of the highest price (price = highest x (1 + % / 100) + markup)
     flagLow: 1.5,          // existing items: flag if our price is less than this above highest
     flagHigh: 2.0,         // existing items: flag if our price is more than this above highest
     nameMaxLength: 60,     // name saved in PosPort: the real product name, only tidied
@@ -65,7 +66,7 @@
   function newItemPrice(highest, settings) {
     const s = Object.assign({}, DEFAULT_SETTINGS, settings || {});
     if (!highest) return null;
-    return round2(highest + Number(s.markup));
+    return round2(highest * (1 + (Number(s.markupPct) || 0) / 100) + (Number(s.markup) || 0));
   }
 
   // Existing items: compare our price with the highest supermarket price.
@@ -73,13 +74,13 @@
     const s = Object.assign({}, DEFAULT_SETTINGS, settings || {});
     const ours = parseMoney(ourPrice);
     if (!highest || ours === null) {
-      return { diff: null, status: 'NO DATA', flagged: false, suggested: highest ? round2(highest + s.markup) : null };
+      return { diff: null, status: 'NO DATA', flagged: false, suggested: highest ? newItemPrice(highest, s) : null };
     }
     const diff = round2(ours - highest);
     let status = 'OK';
     if (diff < s.flagLow - 0.0001) status = 'TOO LOW';
     else if (diff > s.flagHigh + 0.0001) status = 'TOO HIGH';
-    return { diff, status, flagged: status !== 'OK', suggested: round2(highest + s.markup) };
+    return { diff, status, flagged: status !== 'OK', suggested: newItemPrice(highest, s) };
   }
 
   // ---------- barcodes ----------

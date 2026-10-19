@@ -23,6 +23,10 @@ COLES = {"pageProps": {"searchResults": {"results": [{
     "pricing": {"now": 4.5, "was": 0}}]}}}
 
 
+VITASOY = {"Products": [{"Products": [{
+    "Stockcode": 789, "Name": "Vitasoy Oat Milky Long Life Milk Uht", "DisplayName": "Vitasoy Oat Milky Long Life Milk Uht 1l",
+    "PackageSize": "1l", "Barcode": "9310320000000", "Price": 2.5, "WasPrice": 3.0, "IsOnSpecial": True,
+    "AdditionalAttributes": {"sapdepartmentname": "DAIRY"}}]}]}
 KITKAT = {"Products": [{"Products": [{
     "Stockcode": 456, "Name": "Nestle Kit Kat Chunky", "DisplayName": "Nestle Kit Kat Chunky 70g",
     "PackageSize": "70g", "Barcode": "9300605094703", "Price": 2.5, "WasPrice": 0, "IsOnSpecial": False,
@@ -32,6 +36,8 @@ KITKAT = {"Products": [{"Products": [{
 def ww_answer(route):
     """Kit Kat (not in the mock PosPort) for its barcode, Minties (in PosPort) for anything else."""
     body = route.request.post_data or route.request.url
+    if "Vitasoy" in body or "vitasoy" in body:
+        return route.fulfill(json=VITASOY)
     route.fulfill(json=KITKAT if "9300605094703" in body or "Kit Kat" in body else WW)
 
 
@@ -253,7 +259,7 @@ def main():
         page.click("[data-tab=add]")
         page.set_input_files("#addFile", str(pdf))
         wait_until(page, lambda: "Example Wholesale" in page.inner_text("#addTable"))
-        wait_until(page, lambda: "Done:" in page.inner_text("#log").split("Example Wholesale")[-1])
+        wait_until(page, lambda: "Done:" in page.inner_text("#log").split("Loaded 6 items from invoice")[0])
         page.wait_for_timeout(3000)
         txt = page.inner_text("#addTable")
         print("invoice rows:", txt[txt.find("Example Wholesale"):][:600].replace("\n", " | "))
@@ -279,10 +285,45 @@ def main():
         page.click("#chkScan")
         wait_until(page, lambda: "items ·" in page.inner_text("#chkScanInfo"))
         print("scan:", page.inner_text("#chkScanInfo"))
+        # Barcode typo fixed in the row -> that row is looked up again with the new barcode
+        page.click("[data-tab=add]")
+        page.click("#addFilter button[data-f=all]")
+        page.fill("#addScan", "9300000000024"); page.press("#addScan", "Enter")
+        wait_until(page, lambda: page.locator("#addTable tr[data-i] input.bcedit").evaluate_all("els => els.some(e => e.value === '9300000000024')"))
+        wait_until(page, lambda: "Done:" in page.inner_text("#log").split("Scanned 9300000000024")[0])
+        row = page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit")).first
+        assert row.locator("input.bcedit").input_value() == "9300000000024"
+        row.locator("input.bcedit").fill("9300605094703"); row.locator("input.bcedit").press("Tab")
+        wait_until(page, lambda: "Barcode changed to 9300605094703" in page.inner_text("#log"))
+        wait_until(page, lambda: "Kit Kat" in page.locator("#addTable tr[data-i]").first.inner_text())
+        print("after barcode fix:", page.locator("#addTable tr[data-i]").first.inner_text().replace("\n", " | ")[:200])
+        # markup % next to markup $
+        page.fill("#addMarkup", "1.00"); page.fill("#addMarkupPct", "20"); page.click("#addApplyMarkup")
+        wait_until(page, lambda: "Markup set to $1.00 + 20%" in page.inner_text("#log"))
+        page.fill("#addMarkup", "1.50"); page.fill("#addMarkupPct", "0"); page.click("#addApplyMarkup")
+
+        # Woolworths-style invoice (no barcodes) in Buying: one load = shops + PosPort + margins, then send to Items
+        subprocess.run([sys.executable, str(pathlib.Path(__file__).parent / "make_shop_invoices.py"), str(pdf.parent)], check=True)
+        page.click("[data-tab=buy]"); page.click("#buyClear")
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.set_input_files("#buyFile", str(pdf.parent / "woolworths.pdf"))
+        wait_until(page, lambda: "Comparison finished" in page.inner_text("#log"))
+        txt = page.inner_text("#buyTable")
+        print("woolworths invoice:", page.inner_text("#invList").replace("\n", " "), "|", page.inner_text("#log").split("\n")[0])
+        assert "Woolworths #300000001" in page.inner_text("#invList")
+        assert page.locator("#buyTable tbody tr").count() == 7, txt
+        assert "Not in PosPort" in txt and "barcode from" in txt, txt[:800]
+        assert page.inner_text("#bShort") == "1"
+        assert not page.locator("#buySend").is_disabled(), page.inner_text("#buySend")
+        page.click("#buySend")
+        wait_until(page, lambda: "sent to Items & prices" in page.inner_text("#log"))
+        assert "From invoice 300000001" in page.inner_text("#addTable"), page.inner_text("#addTable")[:400]
+
         # Rename + new price for an item already in PosPort: opens the item, saves, then re-opens it to check
         page.click("[data-tab=add]")
         page.click("#addFilter button[data-f=pos]")
-        row = page.locator("#addTable tr.in-pos").filter(has_text="9300682012345").first
+        page.locator("#addTable tr.fhead").filter(has_text="barcodes.xlsx").first.click()     # open that file again
+        row = page.locator("#addTable tr.in-pos").filter(has=page.locator("input.bcedit[value='9300682012345']")).first
         row.locator("input.posname").fill("Allens Minties Bag 150g")
         row.locator("input.newprice").fill("6.20")
         row.locator("input.newprice").blur()

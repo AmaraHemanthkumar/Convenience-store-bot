@@ -195,6 +195,8 @@ tr.fhead.open td { background: var(--accent-soft); }
 .fbar { display: inline-block; width: 70px; height: 6px; background: #ddd; border-radius: 3px; vertical-align: middle; overflow: hidden; }
 .fbar i { display: block; height: 100%; background: var(--accent); }
 .grid input.posname { font-weight: 600; }
+.grid input.bcedit { width: 130px; font-family: inherit; font-size: 13px; padding: 2px 4px; border: 1px solid transparent; background: transparent; }
+.grid input.bcedit:hover, .grid input.bcedit:focus { border-color: #ccc; background: #fff; }
 .fhead-in { flex-wrap: nowrap; } .fmeta { flex: 1 1 auto; min-width: 0; } .fhead-in .btn { white-space: nowrap; }
 @media (max-width: 1200px) { .fhead-in { flex-wrap: wrap; } }
 .bad-txt { color: var(--bad) !important; font-weight: 600; }

@@ -45,7 +45,9 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
      - **New – not in PosPort:** our price is the highest price + markup, the name is the real product name, and a short ticket name and category are made for you.
      - **Already in PosPort:** shows the PosPort price, **TOO LOW / TOO HIGH / OK**, and a suggested new price. The **PosPort name can be edited**: change it, the row is ticked, and **Save changes** renames the item in the Back Office (and changes the price if you set one).
    - asks when it's unsure: *"Already in PosPort as …? Yes, same item / No, it's new"*.
-2. Use the filters (**All · New · Already in PosPort · Needs attention**) and edit anything you like. The **Markup $** box changes all new prices at once.
+2. Use the filters (**All · New · Already in PosPort · Needs attention**) and edit anything you like.
+   - **Markup $ and Markup %** change all new prices at once: price = highest supermarket price × (1 + %) + $. For example $1.50 + 0% (the default), or $0 + 30%, or $1 + 20%.
+   - **Wrong barcode?** Click it in the row, type the right one and press Tab. That row is looked up again by itself.
 3. Save to PosPort:
    - **Create new items** fills Bulk Create (with one spare row). See *If creating fails* below.
    - **Update ticked prices** changes prices of items already in PosPort. **Tick all flagged** ticks every TOO LOW / TOO HIGH item.
@@ -56,7 +58,14 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
 **Working while files load:** background look-ups never redraw the table while you are typing, clicking or scrolling. Finished rows wait and drop in about 2 seconds after you stop, and the page stays where you were. Only the small counts on each file row update straight away.
 
 ### Supplier invoice PDFs (used everywhere)
-Drop the supplier's invoice PDF (e.g. The Distributors Brisbane) into **Items & prices** or **Buying & invoices**. No columns to pick: the bot reads every line (description, barcode, item code, qty, RRP, units per carton, levy, GST) and works out **what one unit really cost you**, inc GST and container deposit. Part cartons such as 0.333 count as whole units.
+The bot reads three kinds of invoice PDF by itself:
+- **Wholesale** invoices with barcodes, such as The Distributors Brisbane.
+- **Woolworths** online-order tax invoices (Line · Description · Ordered · Supplied · Price · Amount).
+- **Coles for business** online-order invoices (Product · Ordered · Picked · Unit price · Total charged).
+
+Woolworths and Coles invoices have no barcodes. The bot finds each product at the shop by name and copies the barcode, but only when it is a confident match. The barcode then shows *"(barcode from Woolworths)"*. Scanned or photographed invoices have no text, so download the PDF from the website or email instead.
+
+Drop the invoice PDF into **Items & prices** or **Buying & invoices**. No columns to pick: the bot reads every line (description, barcode, item code, qty, RRP, units per carton, levy, GST) and works out **what one unit really cost you**, inc GST and container deposit. Part cartons such as 0.333 count as whole units.
 
 Every invoice you load is remembered (listed under *Buying & invoices*, ✕ to forget one) and used as a back-up source of information:
 - **Items & prices:** the invoice becomes one file row ("Supplier #number · date"). Lines that weren't delivered are left unticked.
@@ -67,7 +76,10 @@ Every invoice you load is remembered (listed under *Buying & invoices*, ✕ to f
 
 ### 3 · Buying & invoices
 Is what you paid a good price, or would it be cheaper at Woolworths or Coles today (specials included)?
-- **Load:** an invoice (Excel or the supplier's PDF) or a shopping list (several files at once), or scan barcodes.
+- **Load:** an invoice (Excel or a PDF from your supplier, Woolworths or Coles) or a shopping list (several files at once), or scan barcodes.
+- **One step:** loading does everything by itself. It looks up Woolworths and Coles (specials included), checks PosPort (reading your item list if it is more than 12 hours old), and works out your margin.
+  - Each line says whether the item is **in PosPort** (with its price and TOO LOW / TOO HIGH) or **Not in PosPort**, with a suggested sell price.
+  - **Send to Items & prices** sends the new items and the prices to fix to *Items & prices* as one file row, ready to Create / Save.
 - **Pick columns:**
   - an invoice needs barcode (or name), quantity, and paid per unit, or paid per carton plus units per carton;
   - a shopping list only needs a barcode or name.
@@ -211,6 +223,7 @@ If a step fails, send a screenshot of the PosPort screen together with the messa
 ```
 node tests/rules.test.js                 # pricing / names / categories
 node tests/invoice.test.js               # supplier invoice PDF lines -> unit cost
+python tests/test_invoice_pdfs.py [x.pdf]  # reads made-up wholesale / Woolworths / Coles PDFs (or your own files)
 python tests/test_posport_mock.py        # PosPort actions on the mock page
 python tests/test_extension_e2e.py       # whole extension with fake Woolworths/Coles/PosPort
 python tests/test_python_bot.py          # Python version with the same fakes

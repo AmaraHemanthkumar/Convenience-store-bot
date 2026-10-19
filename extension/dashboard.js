@@ -258,33 +258,37 @@ const INV = window.CSB_INVOICE;
 let invIndex = null;
 function invoiceIndex() {
   if (invIndex) return invIndex;
-  invIndex = { byBarcode: new Map(), byCode: new Map() };
+  invIndex = { byBarcode: new Map(), byCode: new Map(), byName: new Map() };
   // newest invoice wins
   (state.invoices || []).slice().sort((a, b) => (a.loadedAt || 0) - (b.loadedAt || 0)).forEach((inv) => {
     inv.items.forEach((it) => {
       const rec = Object.assign({ supplier: inv.supplier, number: inv.number, date: inv.date }, it);
       if (it.barcode) invIndex.byBarcode.set(R.cleanBarcode(it.barcode).replace(/^0+/, ''), rec);
-      if (it.code) invIndex.byCode.set(it.code, rec);
+      if (it.code && it.barcode) invIndex.byCode.set(it.code, rec);
+      invIndex.byName.set(nameKey(INV.tidyName(it.desc)), rec); invIndex.byName.set(nameKey(it.desc), rec);
     });
   });
   return invIndex;
 }
-function invoiceFor(barcode) {
+// by barcode, or by name (Woolworths / Coles invoices have no barcodes)
+function invoiceFor(barcode, name) {
   const k = R.cleanBarcode(barcode || '').replace(/^0+/, '');
-  return k ? invoiceIndex().byBarcode.get(k) || null : null;
+  const hit = k ? invoiceIndex().byBarcode.get(k) : null;
+  if (hit) return hit;
+  for (const n of [].concat(name || [])) { const h = n && invoiceIndex().byName.get(nameKey(n)); if (h) return h; }
+  return null;
 }
 async function readInvoicePdf(file) {
-  const lines = await INV.pdfToLines(await file.arrayBuffer());
-  const inv = INV.parseInvoice(lines);
+  const inv = await INV.readPdf(await file.arrayBuffer());
   inv.file = file.name; inv.loadedAt = Date.now();
   inv.id = 'inv-' + (inv.number || file.name) ;
-  if (!inv.items.length) throw new Error('No item lines found in ' + file.name + ' – is it a text PDF from the supplier (not a scan)?');
+  if (!inv.items.length) throw new Error(inv.lineCount ? 'No item lines found in ' + file.name + ' – this invoice layout is new to the bot, please send it to me' : file.name + ' has no text – it looks like a scan or photo. Download the PDF from the supplier\'s website or email instead.');
   state.invoices = (state.invoices || []).filter((x) => x.id !== inv.id).concat([inv]);
   invIndex = null;
   saveState(); renderInvoices();
   if (state.add.some((r) => r.status === 'not found' && invoiceFor(r.barcode))) setTimeout(() => startLookup(), 0);
   const diff = inv.printedTotal ? Math.abs(inv.printedTotal - inv.total) : 0;
-  log('Invoice ' + (inv.number || file.name) + ' (' + (inv.date || '') + '): ' + inv.items.length + ' lines' + (inv.fees.length ? ' + ' + inv.fees.map((x) => x.desc + ' ' + m(x.amount)).join(', ') : '') + ', $' + inv.total.toFixed(2) +
+  log((inv.supplier || 'Invoice').replace(/ Pty Ltd/i, '') + ' invoice ' + (inv.number || file.name) + ' (' + (inv.date || '') + '): ' + inv.items.length + ' lines' + (inv.fees.length ? ' + ' + inv.fees.map((x) => x.desc + ' ' + m(x.amount)).join(', ') : '') + ', $' + inv.total.toFixed(2) +
     (diff > 1 ? ' – the invoice says $' + inv.printedTotal.toFixed(2) + ', check the lines (maybe freight or a line the bot could not read).' : ''), diff > 1 ? 'err' : 'ok');
   return inv;
 }
@@ -475,7 +479,7 @@ function rowHTML(r, i) {
   return '<tr data-i="' + i + '" class="' + (pos ? 'in-pos' : '') + '">' +
     (pos ? '<td><input type="checkbox" class="apply" title="Save the new price / name to PosPort" ' + (r.apply ? 'checked' : '') + '></td>'
          : '<td><input type="checkbox" class="use" title="Create this item" ' + (r.use !== false ? 'checked' : '') + '></td>') +
-    '<td>' + esc(r.barcode) + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
+    '<td><input type="text" class="bcedit" inputmode="numeric" value="' + esc(r.barcode || '') + '" placeholder="barcode" title="Wrong barcode? Change it here – the row is looked up again">' + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
     '<td>' + (r.status === 'waiting' ? '<span class="muted">…</span>' : storeCell(r.ww)) + '</td><td>' + (r.status === 'waiting' ? '' : storeCell(r.coles)) + '</td>' +
     '<td class="num">' + m(r.highest) + '</td>' +
     (pos
@@ -643,6 +647,7 @@ $('addTable').addEventListener('change', (e) => {
   const tr = e.target.closest('tr[data-i]');
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
+  if (e.target.classList.contains('bcedit')) { changeBarcode(r, e.target.value); return; }
   if (e.target.classList.contains('cat')) r.category = e.target.value;
   if (e.target.classList.contains('use')) r.use = e.target.checked;
   if (e.target.classList.contains('apply')) r.apply = e.target.checked;
@@ -795,24 +800,31 @@ scanBox('addScan', (code) => {
   startLookup();
 });
 
-function applyMarkup(newMarkup) {
+function markupText() {
+  return (S.markup ? m(S.markup) : '') + (S.markup && S.markupPct ? ' + ' : '') + (S.markupPct ? S.markupPct + '%' : '') || '$0';
+}
+function applyMarkup(newMarkup, newPct) {
   S.markup = newMarkup;
+  if (newPct !== undefined) S.markupPct = newPct;
   chrome.storage.local.set({ settings: S });
   let n = 0;
   state.add.forEach((r) => {
     if (r.pos || r.priceEdited || r.overridePrice || !r.highest || r.status === 'created') return;
     r.price = R.newItemPrice(r.highest, S); n++;
   });
-  $('s_markup').value = S.markup;
+  $('s_markup').value = S.markup; $('s_markupPct').value = S.markupPct || 0;
+  state.add.forEach((r) => { if (r.pos && r.highest) { r.chk = R.checkExistingPrice(r.pos.price, r.highest, S); if (!r.apply) r.newPrice = r.chk.flagged ? r.chk.suggested : r.newPrice; } });
   renderAdd(); saveState();
-  log('Markup set to ' + m(S.markup) + ' – ' + n + ' prices updated (prices you typed yourself were kept).', 'ok');
+  log('Markup set to ' + markupText() + ' – ' + n + ' prices updated (prices you typed yourself were kept).', 'ok');
 }
 $('addApplyMarkup').addEventListener('click', () => {
-  const v = parseFloat($('addMarkup').value);
-  if (!isFinite(v) || v < 0) { log('Type a markup like 1.50', 'err'); return; }
-  applyMarkup(R.round2(v));
+  const v = parseFloat($('addMarkup').value || '0');
+  const pct = parseFloat($('addMarkupPct').value || '0');
+  if (!isFinite(v) || v < 0 || !isFinite(pct) || pct < 0) { log('Type a markup like 1.50 and/or a percent like 20', 'err'); return; }
+  applyMarkup(R.round2(v), pct);
 });
 $('addMarkup').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addApplyMarkup').click(); });
+$('addMarkupPct').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('addApplyMarkup').click(); });
 $('addRename').addEventListener('click', () => {
   let n = 0;
   state.add.forEach((r) => {
@@ -890,10 +902,10 @@ async function startLookup(again) {
     const tried = new Set();
     const next = () => {
       if (lookupStop) return null;
-      const waiting = (x) => ['waiting', 'error', 'not found'].includes(x.status) && !tried.has(x) && (x.barcode || x.inName || x.hint);
+      const waiting = (x) => ['waiting', 'error', 'not found'].includes(x.status) && (!tried.has(x) || x.relook) && (x.barcode || x.inName || x.hint);
       const open = new Set((state.files || []).filter((f) => f.open).map((f) => f.id));
       const r = state.add.find((x) => waiting(x) && open.has(x.fileId || 'old')) || state.add.find(waiting);
-      if (r) { tried.add(r); r.looking = true; }
+      if (r) { tried.add(r); r.looking = true; r.relook = false; }
       return r;
     };
     await runPool(S.parallel || 3, next, async (r) => {
@@ -911,6 +923,29 @@ async function startLookup(again) {
 let lookupStop = false;
 $('addLookup').addEventListener('click', () => startLookup(true));
 
+// a shop result we trust enough to copy its barcode: matched by barcode, the only result, or a name match of 70%+
+function strongMatch(x) {
+  const mm = String((x && x.match) || '');
+  if (mm === 'barcode' || /^only result/.test(mm)) return true;
+  const pct = Number((mm.match(/(\d+)%/) || [])[1]);
+  return pct >= 70;
+}
+// Wrong barcode typed/scanned: fix it in the row, then that row alone is looked up again.
+function changeBarcode(r, value) {
+  const bc = R.cleanBarcode(value);
+  if (bc === (r.barcode || '')) return;
+  if (r.status === 'created' || r.updated === true) { log('That item is already saved in PosPort – change its barcode in the Back Office.', 'err'); replaceRow(r); return; }
+  r.barcode = bc;
+  Object.assign(r, { status: 'waiting', ww: null, coles: null, highest: null, net: null, inv: null, pos: null, chk: null, maybe: null,
+    notInPos: false, invPriced: false, note: '', newPrice: null, newName: null, apply: false, use: true });
+  if (!r.nameEdited) { r.name = ''; r.nameFromInvoice = false; }
+  if (!r.tnameEdited) r.tname = '';
+  if (!r.priceEdited) r.price = null;
+  log('Barcode changed to ' + (bc || '(none)') + ' – looking it up again.' + (bc && !R.validBarcode(bc) ? ' (check digit looks wrong – please check it)' : ''), bc && !R.validBarcode(bc) ? 'err' : '');
+  r.relook = true;            // picked up even if a background look-up is already running
+  replaceRow(r); saveState(); startLookup();
+}
+
 async function lookupOne(r) {
   let res = await lookupPrices(r.barcode, r.inName || r.hint);
   r.net = null;
@@ -924,8 +959,10 @@ async function lookupOne(r) {
     }
   }
   r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
-  r.inv = invoiceFor(r.barcode);
   const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
+  // a line from a Woolworths / Coles invoice has no barcode: take it from the shop's product
+  if (!r.barcode && src && src.barcode && strongMatch(src)) { r.barcode = R.cleanBarcode(src.barcode); r.barcodeFrom = src === res.ww ? 'Woolworths' : 'Coles'; }
+  r.inv = invoiceFor(r.barcode, [r.hint, r.inName, r.name]);
   const nameSrc = src || r.net;
   if (nameSrc && !r.inName && !r.nameEdited) setNames(r, nameSrc.name, nameSrc.size);
   else if (!nameSrc && r.inv && !r.inName && !r.nameEdited) { setNames(r, INV.tidyName(r.inv.desc), ''); r.nameFromInvoice = true; }
@@ -2136,13 +2173,15 @@ function renderBuy() {
     '<thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Paid / unit</th><th>Woolworths</th><th>Coles</th><th class="num">Cheapest now</th><th>Verdict</th><th class="num">PosPort sell</th><th class="num">Margin</th></tr></thead><tbody>' +
     state.buy.map((r, i) => ({ r, i })).filter(({ r }) => show(r)).map(({ r, i }) => {
       const margin = r.sell && r.unitCost ? Math.round((r.sell - r.unitCost) / r.sell * 100) + '%' : '';
-      return '<tr data-i="' + i + '"><td><b>' + esc(r.name || (r.ww && r.ww.found && r.ww.name) || '') + '</b><span class="sub">' + esc(r.barcode || '') + (r.file ? ' · ' + esc(r.file) : '') + '</span></td>' +
+      return '<tr data-i="' + i + '"><td><b>' + esc(r.name || (r.ww && r.ww.found && r.ww.name) || '') + '</b><span class="sub">' + esc(r.barcode || '') + (r.barcodeFrom ? ' (barcode from ' + esc(r.barcodeFrom) + ')' : '') + (r.file ? ' · ' + esc(r.file) : '') + '</span></td>' +
         '<td class="num">' + esc(r.qty || '') + '</td>' +
         '<td class="num"><input type="number" step="0.01" class="price buycost" value="' + (r.unitCost ? r.unitCost.toFixed(2) : '') + '" placeholder="–"></td>' +
         '<td>' + storeCell(r.ww) + '</td><td>' + storeCell(r.coles) + '</td>' +
         '<td class="num">' + (r.best ? m(r.best.p) + '<span class="sub">' + r.best.store + '</span>' : '') + '</td>' +
         '<td><span class="verdict ' + (r.vclass || '') + '">' + esc(r.vtext || (r.ww ? '' : 'not checked yet')) + '</span>' + (r.special ? '<span class="sub special">on special now</span>' : '') + '</td>' +
-        '<td class="num">' + (r.sell ? m(r.sell) + '<span class="sub">' + esc(r.posName || '') + '</span>' : '') + '</td>' +
+        '<td class="num">' + (r.sell ? m(r.sell) + '<span class="sub">' + esc(r.posName || '') + '</span>' +
+            (r.posChk && r.posChk.flagged ? '<span class="sub verdict ' + (r.posChk.status === 'TOO LOW' ? 'bad' : 'warn') + '">' + r.posChk.status + ' → ' + m(r.posChk.suggested) + '</span>' : '')
+          : r.inPos === false ? '<span class="verdict warn">Not in PosPort</span>' + (r.suggested ? '<span class="sub">sell at ' + m(r.suggested) + '</span>' : '') : '') + '</td>' +
         '<td class="num">' + margin + '</td></tr>';
     }).join('') + '</tbody>';
   // totals
@@ -2158,6 +2197,13 @@ function renderBuy() {
   $('buyLookup').disabled = busy || !state.buy.length;
   $('buyExport').disabled = !state.buy.some((r) => r.ww);
   $('buyReturns').disabled = !state.buy.some((r) => r.verdict === 'worse');
+  const toSend = buyToSend();
+  $('buySend').disabled = busy || !toSend.length;
+  $('buySend').textContent = 'Send to Items & prices' + (toSend.length ? ' (' + toSend.filter((r) => r.inPos === false).length + ' new · ' + toSend.filter((r) => r.posChk && r.posChk.flagged).length + ' to fix)' : '');
+}
+// items worth sending: not in PosPort yet, or a PosPort price that is flagged
+function buyToSend() {
+  return state.buy.filter((r) => !r.notDelivered && (r.barcode || r.name) && (r.inPos === false || (r.posChk && r.posChk.flagged)));
 }
 
 $('buyFilter').addEventListener('click', (e) => { const b = e.target.closest('button[data-f]'); if (b) { state.buyFilter = b.dataset.f; renderBuy(); } });
@@ -2169,6 +2215,36 @@ $('buyTable').addEventListener('change', (e) => {
   buyVerdict(r); renderBuy(); saveState();
 });
 $('buyClear').addEventListener('click', () => { state.buy = []; renderBuy(); saveState(); });
+// Send to Items & prices: one file row per invoice, with names, shop prices and invoice cost already filled in
+$('buySend').addEventListener('click', () => {
+  const list = buyToSend();
+  if (!list.length) return;
+  ensureFiles();
+  const groups = new Map();
+  list.forEach((r) => { const k = r.file || 'Buying list'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); });
+  const seen = new Set(state.add.filter((x) => x.status !== 'created').map((x) => x.barcode).filter(Boolean));
+  let n = 0;
+  groups.forEach((rows, label) => {
+    const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const items = [];
+    rows.forEach((b) => {
+      if (b.barcode && seen.has(b.barcode)) return;
+      if (b.barcode) seen.add(b.barcode);
+      const r = { barcode: b.barcode || '', inName: '', hint: b.supplierDesc || b.name || '', name: '', tname: '', category: '', price: null,
+        status: 'waiting', use: true, fileId: id, note: '' };
+      setNames(r, b.name || INV.tidyName(b.supplierDesc || ''), '');
+      items.push(r);
+    });
+    if (!items.length) return;
+    state.files.forEach((f) => { f.open = false; });
+    state.files.push({ id, name: 'From ' + label, open: true });
+    state.add.push(...items); n += items.length;
+  });
+  saveState(); renderAdd();
+  document.querySelector('[data-tab=add]').click();
+  log(n ? n + ' items sent to Items & prices – check them, then "Create" the new ones and "Save" the price fixes.' : 'Those items are already in Items & prices.', n ? 'ok' : '');
+  if (n) startLookup();
+});
 document.addEventListener('click', (e) => {
   if (!e.target.classList.contains('inv-del')) return;
   state.invoices = (state.invoices || []).filter((x) => x.id !== e.target.dataset.id);
@@ -2183,8 +2259,9 @@ $('buyFile').addEventListener('change', async (e) => {
       let inv;
       try { inv = await readInvoicePdf(f); } catch (err) { log(err.message, 'err'); continue; }
       const label = 'invoice ' + (inv.number || f.name);
-      inv.items.forEach((it) => state.buy.push({
+      inv.items.forEach((it, k) => state.buy.push({
         barcode: it.barcode, name: INV.tidyName(it.desc), supplierDesc: it.desc, qty: it.unitsReceived || '', cost: it.unitCost, file: label,
+        invRef: { id: inv.id, k }, supplier: inv.supplier,
         notDelivered: it.shipped === 0 ? (it.status || 'not delivered') + (it.unitsShort ? ' – ' + it.unitsShort + ' units short' : '') : '',
         rrp: it.rrp, promo: it.promo,
       }));
@@ -2205,7 +2282,8 @@ $('buyFile').addEventListener('change', async (e) => {
   }
   $('buyInfo').textContent = state.buy.length + ' lines';
   renderBuy(); saveState();
-  if (state.buy.length && confirm('Compare ' + state.buy.length + ' items with Woolworths and Coles now?')) $('buyLookup').click();
+  // one step: compare with Woolworths + Coles, check PosPort, work out margins – no more questions
+  if (state.buy.some((r) => !r.ww)) $('buyLookup').click();
 });
 scanBox('buyScan', (code) => {
   state.buy.unshift({ barcode: code, name: '', qty: 1, file: 'scanned' });
@@ -2213,22 +2291,40 @@ scanBox('buyScan', (code) => {
   if (!busy) $('buyLookup').click();
 });
 
+function buyPosCheck(r) {
+  const c = (r.barcode && state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, r.barcode))) ||
+    (r.name && state.catalogue.length ? (() => { const mm = R.posMatch(r.name, state.catalogue, (x) => x.name); return mm.sure ? mm.item : null; })() : null) ||
+    (r.ww && r.ww.found && r.ww.name && state.catalogue.length ? (() => { const mm = R.posMatch(r.ww.name, state.catalogue, (x) => x.name); return mm.sure ? mm.item : null; })() : null);
+  r.sell = c ? c.price : null; r.posName = c ? c.name : '';
+  r.inPos = state.catalogue.length ? !!c : null;              // null = PosPort list not read
+  const highest = R.highestPrice(r.ww && r.ww.found ? r.ww.regular : null, r.coles && r.coles.found ? r.coles.regular : null);
+  r.highest = highest;
+  r.suggested = highest ? R.newItemPrice(highest, S) : (r.unitCost ? R.round2(r.unitCost * (1 + (S.fallbackMargin || 40) / 100)) : null);
+  r.posChk = c && highest ? R.checkExistingPrice(c.price, highest, S) : null;
+}
 $('buyLookup').addEventListener('click', async () => {
   setBusy(true);
   try {
+    if (await ensureCatalogue()) log('Checking against ' + state.catalogue.length + ' PosPort items.');
     const next = () => { if (stopRequested) return null; const r = state.buy.find((x) => !x.ww && !x.tried); if (r) r.tried = true; return r; };
     await runPool(S.parallel || 3, next, async (r) => {
       log('Comparing ' + (r.name || r.barcode));
       const res = await lookupPrices(r.barcode, r.name);
       r.ww = res.ww; r.coles = res.coles;
-      if (!r.name) { const src = (res.ww && res.ww.found && res.ww) || (res.coles && res.coles.found && res.coles); if (src) r.name = src.name; }
-      const c = (r.barcode && state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, r.barcode))) ||
-        (r.name && state.catalogue.length ? (() => { const mm = R.posMatch(r.name, state.catalogue, (x) => x.name); return mm.sure ? mm.item : null; })() : null);
-      if (c) { r.sell = c.price; r.posName = c.name; }
-      buyVerdict(r); renderBuy(); saveState();
+      const src = (res.ww && res.ww.found && res.ww) || (res.coles && res.coles.found && res.coles);
+      if (!r.name && src) r.name = src.name;
+      // shop invoices have no barcodes: take it from the matching shop product, and teach the saved invoice
+      if (!r.barcode && src && src.barcode && strongMatch(src)) {
+        r.barcode = R.cleanBarcode(src.barcode); r.barcodeFrom = src.store;
+        const inv = r.invRef && (state.invoices || []).find((x) => x.id === r.invRef.id);
+        if (inv && inv.items[r.invRef.k] && !inv.items[r.invRef.k].barcode) { inv.items[r.invRef.k].barcode = r.barcode; invIndex = null; }
+      }
+      buyVerdict(r); buyPosCheck(r); renderBuy(); saveState();
     });
-    state.buy.forEach((r) => { delete r.tried; });
-    log('Comparison finished.', 'ok');
+    state.buy.forEach((r) => { delete r.tried; if (r.ww) buyPosCheck(r); });
+    const notIn = state.buy.filter((r) => r.inPos === false && !r.notDelivered).length;
+    const flagged = state.buy.filter((r) => r.posChk && r.posChk.flagged).length;
+    log('Comparison finished.' + (state.catalogue.length ? ' ' + notIn + ' not in PosPort yet, ' + flagged + ' PosPort prices to fix – press "Send to Items & prices" to create / fix them.' : ''), 'ok');
   } finally { setBusy(false); renderBuy(); }
 });
 
@@ -2358,7 +2454,7 @@ $('bkItems').addEventListener('click', () => runBackup(true));
 // =====================================================================
 // SETTINGS
 // =====================================================================
-const NUM_KEYS = ['markup', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel', 'fallbackMargin', 'minMargin'];
+const NUM_KEYS = ['markup', 'markupPct', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel', 'fallbackMargin', 'minMargin'];
 function fillSettings() {
   NUM_KEYS.forEach((k) => { $('s_' + k).value = S[k]; });
   $('s_extraBlankRow').checked = !!S.extraBlankRow;
@@ -2369,6 +2465,7 @@ function fillSettings() {
   $('s_selectors').value = S.selectors && Object.keys(S.selectors).length ? JSON.stringify(S.selectors, null, 2) : '';
   $('s_abbrevs').value = S.abbrevs || '';
   $('addMarkup').value = Number(S.markup).toFixed(2);
+  $('addMarkupPct').value = S.markupPct || 0;
   R.setAbbreviations(S.abbrevs || '');
   document.querySelectorAll('.lowLbl').forEach((x) => { x.textContent = m(S.flagLow); });
   document.querySelectorAll('.highLbl').forEach((x) => { x.textContent = m(S.flagHigh); });

@@ -57,4 +57,9 @@ assert.strictEqual(R.guessCategory('Some Unknown Thing', 'Pantry'), 'Grocery Pan
 // spreadsheet input
 const rows = R.parseInputRows([['Barcode', 'Name'], [9300682012345, ''], ['9300682012345', ''], ['', 'Thing 1L']]);
 assert.strictEqual(rows.length, 2);   // duplicate barcode removed
+// markup $ and/or %
+assert.strictEqual(R.newItemPrice(2.0, { markup: 1.5, markupPct: 0 }), 3.5);
+assert.strictEqual(R.newItemPrice(2.0, { markup: 1.5, markupPct: 20 }), 3.9);
+assert.strictEqual(R.newItemPrice(5.0, { markup: 0, markupPct: 30 }), 6.5);
+assert.strictEqual(R.checkExistingPrice(3.0, 2.0, { markup: 1.5, markupPct: 20 }).suggested, 3.9);
 console.log('rules tests passed');
