@@ -94,6 +94,8 @@ def main():
         assert page.locator("#addTable tr.fhead.open").count() == 1      # first file open, second waits in the background
         wait_until(page, lambda: "Done:" in page.inner_text("#log"))
         print("summary:", page.inner_text("#addSummary"))
+        print("speed:", [l for l in page.inner_text("#log").split("\n") if "Done:" in l][0])
+        print("speed:", [l for l in page.inner_text("#log").split("\n") if "Done:" in l][0])
         assert page.inner_text("#fNew") == "1" and page.inner_text("#fPos") == "2", (page.inner_text("#fNew"), page.inner_text("#fPos"))  # fake shops answer Minties for the 2nd file too
         heads = page.locator("#addTable tr.fhead")
         print("file rows:", [heads.nth(i).inner_text().replace("\n", " ")[:90] for i in range(2)])
@@ -285,6 +287,43 @@ def main():
         page.click("#chkScan")
         wait_until(page, lambda: "items ·" in page.inner_text("#chkScanInfo"))
         print("scan:", page.inner_text("#chkScanInfo"))
+        # Several files at once: every file moves forward together (not one file after the other)
+        page.click("[data-tab=add]")
+        many = []
+        for k in range(3):
+            wbk = Workbook(); wsk = wbk.active; wsk.append(["Barcode", "Item"])
+            for j in range(4): wsk.append([f"93000000{k}{j}0000", f"Test product {k}{j} 100g"])
+            pk = pathlib.Path(tempfile.mkdtemp()) / f"many{k}.xlsx"; wbk.save(pk); many.append(str(pk))
+        page.set_input_files("#addFile", many)
+        def heads():
+            return [h for h in page.locator("#addTable tr.fhead").all_inner_texts() if "many" in h]
+        wait_until(page, lambda: len(heads()) == 3 and all("looking up 0/" not in h for h in heads()), 60000)
+        print("files started together:", [h.split("·")[1].strip() if "·" in h else h for h in heads()])
+        wait_until(page, lambda: all("looked up" in h for h in heads()), 120000)
+
+        # Several files at once: every file moves forward together (not one file after the other)
+        page.click("[data-tab=add]")
+        many = []
+        for k in range(3):
+            wbk = Workbook(); wsk = wbk.active; wsk.append(["Barcode", "Item"])
+            for j in range(4): wsk.append([f"93000000{k}{j}0000", f"Test product {k}{j} 100g"])
+            pk = pathlib.Path(tempfile.mkdtemp()) / f"many{k}.xlsx"; wbk.save(pk); many.append(str(pk))
+        page.set_input_files("#addFile", many)
+        heads = lambda: [h for h in page.locator("#addTable tr.fhead").all_inner_texts() if "many" in h]
+        wait_until(page, lambda: len(heads()) == 3 and all("looking up 0/" not in h for h in heads()), 60000)
+        print("files started together:", [" ".join(h.split())[:60] for h in heads()])
+        wait_until(page, lambda: all("looked up" in h for h in heads()), 120000)
+
+        # Tickets for a whole category (from the PosPort item list)
+        page.click("[data-tab=tickets]")
+        opts = page.locator("#tkCat option").all_inner_texts()
+        print("ticket categories:", opts)
+        cat = [o for o in opts if "(" in o and "Pick" not in o][0]
+        page.select_option("#tkCat", label=cat)
+        page.click("#tkAddCat")
+        wait_until(page, lambda: "items on the print list" in page.inner_text("#log"))
+        print("category tickets:", page.inner_text("#log").split("\n")[0])
+
         # Barcode typo fixed in the row -> that row is looked up again with the new barcode
         page.click("[data-tab=add]")
         page.click("#addFilter button[data-f=all]")

@@ -95,8 +95,24 @@ async function loadAll() {
   state.catalogueAt = d.catalogueAt || 0;
   state.files = Array.isArray(d.files) ? d.files : [];
   state.invoices = Array.isArray(d.invoices) ? d.invoices : [];
+  const pc = await chrome.storage.local.get('priceCache');
+  Object.entries(pc.priceCache || {}).forEach(([k, v]) => { if (v && Date.now() - v.at < PRICE_CACHE_HOURS * 3600000) priceCache.set(k, v); });
 }
+// Saving everything after every single look-up is slow with 1000+ rows: save at most about once a second.
+let saveTimer = null, saveWaiters = [], lastSave = 0;
 function saveState() {
+  return new Promise((resolve) => {
+    saveWaiters.push(resolve);
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = null; lastSave = Date.now();
+      const w = saveWaiters; saveWaiters = [];
+      saveStateNow().then(() => w.forEach((f) => f()), () => w.forEach((f) => f()));
+    }, Math.max(0, 1000 - (Date.now() - lastSave)));
+  });
+}
+window.addEventListener('pagehide', () => { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; saveStateNow(); } savePriceCache(true); });
+function saveStateNow() {
   return chrome.storage.local.set({ add: state.add, check: state.check, checkInput: state.checkInput, catalogue: state.catalogue, categories, tickets: state.tickets, tkOpts: state.tkOpts, catalogueAt: state.catalogueAt || 0, buy: state.buy, files: state.files || [], invoices: state.invoices || [] });
 }
 
@@ -212,7 +228,41 @@ async function storeCall(kind, fn, args) {
   return { found: false, error: cfg.label + ' kept blocking requests' };
 }
 
+// ---- price memory: the same product on many invoices/sheets is looked up only once ----
+// Kept for 12 hours (also after closing the bot). "Look up again" clears it.
+const PRICE_CACHE_HOURS = 12;
+const priceCache = new Map();      // key -> { at, ww, coles, highest }
+const priceInFlight = new Map();   // key -> promise, so two rows with the same product share one look-up
+let cacheTimer = null;
+const priceKey = (barcode, name) => (R.cleanBarcode(barcode || '') ? 'b:' + R.cleanBarcode(barcode).replace(/^0+/, '') : 'n:' + String(name || '').toLowerCase().replace(/[^a-z0-9]/g, ''));
+function savePriceCache(now) {
+  const write = () => {
+    cacheTimer = null;
+    const obj = {};
+    Array.from(priceCache.entries()).slice(-6000).forEach(([k, v]) => { obj[k] = v; });
+    chrome.storage.local.set({ priceCache: obj });
+  };
+  if (now) { if (cacheTimer) { clearTimeout(cacheTimer); write(); } return; }
+  if (!cacheTimer) cacheTimer = setTimeout(write, 5000);
+}
+function clearPriceCache() { priceCache.clear(); chrome.storage.local.set({ priceCache: {} }); }
+let cacheHits = 0;
 async function lookupPrices(barcode, nameHint) {
+  const key = priceKey(barcode, nameHint);
+  if (key === 'n:') return lookupPricesLive(barcode, nameHint);
+  const hit = priceCache.get(key);
+  if (hit && Date.now() - hit.at < PRICE_CACHE_HOURS * 3600000) { cacheHits++; return JSON.parse(JSON.stringify({ ww: hit.ww, coles: hit.coles, highest: hit.highest, cached: true })); }
+  if (priceInFlight.has(key)) { cacheHits++; return priceInFlight.get(key).then((x) => JSON.parse(JSON.stringify(x))); }
+  const p = lookupPricesLive(barcode, nameHint).then((res) => {
+    // only remember real answers (not blocked pages / errors)
+    const ok = (x) => x && (x.found || (!x.error && !x.blocked));
+    if (ok(res.ww) && ok(res.coles)) { priceCache.set(key, { at: Date.now(), ww: res.ww, coles: res.coles, highest: res.highest }); savePriceCache(); }
+    return res;
+  }).finally(() => priceInFlight.delete(key));
+  priceInFlight.set(key, p);
+  return p;
+}
+async function lookupPricesLive(barcode, nameHint) {
   // Woolworths and Coles are asked at the same time
   let [ww, coles] = await Promise.all([
     storeCall('ww', 'wwLookup', [barcode, nameHint || '']),
@@ -892,6 +942,7 @@ async function ensureCatalogue() {
 // (create, change prices, print) while the next files are being looked up.
 let lookupRunning = false;
 async function startLookup(again) {
+  if (again) clearPriceCache();
   if (again) state.add.forEach((r) => { if (r.status !== 'created' && r.updated !== true) { r.status = 'waiting'; r.pos = null; r.maybe = null; r.chk = null; } });
   if (lookupRunning) return;
   lookupRunning = true;
@@ -900,11 +951,22 @@ async function startLookup(again) {
     $('addScanInfo').textContent = state.catalogue.length ? 'Checked against ' + state.catalogue.length + ' PosPort items' : 'PosPort not checked';
     let n = 0;
     const tried = new Set();
+    // Every file moves forward at the same time: every other look-up goes to the file you have open,
+    // the rest take turns across all the other files.
+    let turn = 0, rot = 0;
+    const startedAt = Date.now(), hits0 = cacheHits;
     const next = () => {
       if (lookupStop) return null;
       const waiting = (x) => ['waiting', 'error', 'not found'].includes(x.status) && (!tried.has(x) || x.relook) && (x.barcode || x.inName || x.hint);
       const open = new Set((state.files || []).filter((f) => f.open).map((f) => f.id));
-      const r = state.add.find((x) => waiting(x) && open.has(x.fileId || 'old')) || state.add.find(waiting);
+      const fromOpen = () => state.add.find((x) => waiting(x) && open.has(x.fileId || 'old'));
+      const fromOthers = () => {
+        const ids = Array.from(new Set(state.add.filter((x) => waiting(x) && !open.has(x.fileId || 'old')).map((x) => x.fileId || 'old')));
+        if (!ids.length) return null;
+        const fid = ids[rot++ % ids.length];
+        return state.add.find((x) => waiting(x) && (x.fileId || 'old') === fid);
+      };
+      const r = (turn++ % 2 === 0 ? (fromOpen() || fromOthers()) : (fromOthers() || fromOpen())) || state.add.find(waiting);
       if (r) { tried.add(r); r.looking = true; r.relook = false; }
       return r;
     };
@@ -916,7 +978,9 @@ async function startLookup(again) {
     });
     if (n) {
       const nPos = state.add.filter((r) => r.pos).length, nNew = state.add.length - nPos;
-      log('Done: ' + nNew + ' new items, ' + nPos + ' already in PosPort (' + state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length + ' prices flagged).', 'ok');
+      const secs = Math.max(1, (Date.now() - startedAt) / 1000);
+      log('Done: ' + nNew + ' new items, ' + nPos + ' already in PosPort (' + state.add.filter((r) => r.pos && r.chk && r.chk.flagged).length + ' prices flagged). ' +
+        n + ' looked up in ' + (secs < 90 ? Math.round(secs) + 's' : Math.round(secs / 60) + ' min') + (cacheHits - hits0 ? ', ' + (cacheHits - hits0) + ' of them answered from memory (same product seen before)' : '') + '.', 'ok');
     }
   } finally { lookupRunning = false; lookupStop = false; safeRenderAdd(); }
 }
@@ -1878,7 +1942,49 @@ function fitTickets(root) {
   });
 }
 
+// ---- tickets for a whole PosPort category ----
+const looksLikeId = (c) => /^[0-9a-f]{8}-[0-9a-f]{4}-|^\d+$|^[0-9a-f]{20,}$/i.test(String(c || ''));
+function catalogueByCategory() {
+  const groups = new Map();
+  const list = state.catalogue || [];
+  // the PosPort list gives category names; if it only gave ids, use the bot's own guess from the name
+  const useGuess = list.filter((c) => c.category).length < list.length / 3 || list.filter((c) => looksLikeId(c.category)).length > list.length / 3;
+  list.forEach((c) => {
+    if (!c.name) return;
+    let cat = useGuess ? R.guessCategory(c.name, '', categories) : c.category;
+    cat = String(cat || 'No category').trim() || 'No category';
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(c);
+  });
+  return { groups, guessed: useGuess };
+}
+function fillTicketCategories() {
+  const sel = $('tkCat');
+  if (!sel) return;
+  const keep = sel.value;
+  const { groups, guessed } = catalogueByCategory();
+  if (!groups.size) { sel.innerHTML = '<option value="">– read the PosPort list first (↻) –</option>'; $('tkAddCat').disabled = true; return; }
+  sel.innerHTML = '<option value="">Pick a category' + (guessed ? ' (guessed from names)' : '') + '…</option>' +
+    Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([c, items]) => '<option value="' + esc(c) + '">' + esc(c) + ' (' + items.length + ')</option>').join('');
+  if (keep && groups.has(keep)) sel.value = keep;
+  $('tkAddCat').disabled = busy || !sel.value;
+}
+$('tkCat').addEventListener('change', () => { $('tkAddCat').disabled = busy || !$('tkCat').value; });
+$('tkAddCat').addEventListener('click', () => {
+  const cat = $('tkCat').value;
+  const items = (catalogueByCategory().groups.get(cat) || []).filter((c) => c.price > 0);
+  if (!items.length) { log('No priced items in ' + cat + '.', 'err'); return; }
+  const age = state.catalogueAt ? Math.round((Date.now() - state.catalogueAt) / 3600000) : null;
+  addTickets(items.map((c) => ({ full: c.name, name: ticketNameOf(c.name, ''), price: c.price, barcode: c.barcode || '' })));
+  log(cat + ': ' + items.length + ' items on the print list, PosPort prices' + (age !== null ? ' from ' + (age < 1 ? 'less than an hour' : age + ' hours') + ' ago' : '') + (age > 12 ? ' – press ↻ first if prices changed' : '') + '.', age > 12 ? 'err' : 'ok');
+});
+$('tkCatRefresh').addEventListener('click', async () => {
+  setBusy(true);
+  try { await scanCatalogue(); } finally { setBusy(false); fillTicketCategories(); }
+});
+
 function renderTickets() {
+  fillTicketCategories();
   const t = $('tkTable');
   const o = tkOpts();
   if (!state.tickets.length) {

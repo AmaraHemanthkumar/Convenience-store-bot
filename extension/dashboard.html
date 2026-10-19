@@ -186,6 +186,11 @@
             <button id="tkFromLabels" class="btn small hidden">From Labels list</button>
           </div>
           <div class="row">
+            <label class="inline small-note">Whole category: <select id="tkCat"><option value="">– read the PosPort list first –</option></select></label>
+            <button id="tkAddCat" class="btn small" disabled title="Every PosPort item in this category, with its PosPort name, price and barcode">Add all in category</button>
+            <button id="tkCatRefresh" class="btn small" title="Read the PosPort item list again (prices and categories)">↻</button>
+          </div>
+          <div class="row">
             <label class="btn small file primary-outline">Load Excel / CSV<input type="file" id="tkFile" accept=".xlsx,.xls,.csv" multiple></label>
             <span class="muted small-note">e.g. the saved price-check Excel</span>
           </div>

@@ -35,6 +35,8 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
    - Click the row to **open the whole sheet** and work on it.
    - The bot reads the columns by itself. If a file comes out wrong, use **Columns…** on that file's row to pick them.
    - **The open file is looked up first**, and the other files keep being looked up in the background while you work.
+   - **All files move forward together:** every other look-up goes to the file you have open, and the rest take turns across all the other files.
+   - **Price memory:** a product that is on several invoices or sheets is looked up only once. The answer is kept for 12 hours, even after closing the bot. **Look up again** clears it and asks the shops fresh.
    - **Look-ups run in parallel:** Woolworths and Coles are asked at the same time, and 3 items are looked up at once. You can set 1–6 in Settings. If the shops start showing "are you a robot" pages, lower it.
    - **Each file row has its own buttons:** Create N new · Tick flagged · Save N changes · Tickets (send the whole file to the print list) · Excel · ✕ remove.
 
@@ -151,6 +153,7 @@ Each tab has a **Download failed items** button, and the file also downloads aut
 Both are shown in the Add table and you can edit either one. To save the short name in PosPort as well, tick the option in Settings.
 
 ### 2 · Tickets & labels (print your own shelf tickets)
+- **Whole category:** pick a PosPort category (e.g. *CONFECTIONERY*) and press **Add all in category**. Every item in it goes onto the print list with its PosPort name, price and barcode. Press ↻ first to read the PosPort list again if prices changed. If PosPort's list doesn't give category names, the bot groups items by its own guess from the name.
 These are made by the bot itself, so you don't need PosPort's label page:
 - **Sizes:** 2.5 or 3 inches wide, 1 or 1.25 inches tall, or any custom size.
 - **On each ticket:** the name (as large as fits on 2 lines), a big price, the size, the unit price (e.g. $6.32 per 100g), and a scannable barcode (EAN-13/EAN-8/UPC; anything else is drawn as Code 128). Optionally the shop name and date.
