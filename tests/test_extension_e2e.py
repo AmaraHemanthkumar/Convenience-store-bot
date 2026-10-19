@@ -370,6 +370,17 @@ def main():
         page.click("#buySend")
         wait_until(page, lambda: "sent to Items & prices" in page.inner_text("#log"))
         assert "From invoice 300000001" in page.inner_text("#addTable"), page.inner_text("#addTable")[:400]
+        wait_until(page, lambda: "Done:" in page.inner_text("#log").split("sent to Items")[0], 120000)
+        # Item added in PosPort after the bot read the list: "Re-check PosPort" moves it from new to in PosPort
+        posp = [pg for pg in ctx.pages if "posport" in pg.url][0]
+        posp.evaluate("""() => { const it = JSON.parse(localStorage.getItem('mockItems') || 'null') || [['5 Gum Grape Spark 27g',0,101],['A2 Full Cream 2L',7.5,102],['ALLENS MINTIES 150G',5.5,103],['Allens Minties Party 500g',9,104]];
+                         it.push(['Huggies Gentle Cleanse Baby Wipes Fragrance Free 80 Pack', 4.99, 110]); localStorage.setItem('mockItems', JSON.stringify(it)); }""")
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.click("#addRecheck")
+        wait_until(page, lambda: "PosPort re-checked" in page.inner_text("#log"), 120000)
+        print("recheck:", page.inner_text("#log").split("\n")[0], "|", page.inner_text("#addScanInfo"))
+        assert "1 items were already in PosPort" in page.inner_text("#log"), page.inner_text("#log")[:300]
+
 
         # Rename + new price for an item already in PosPort: opens the item, saves, then re-opens it to check
         page.click("[data-tab=add]")

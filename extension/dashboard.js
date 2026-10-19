@@ -1002,6 +1002,39 @@ function findInPos(r) {
   return { item: null, maybe: best ? Object.assign({ score: best.score }, best.item) : null };
 }
 
+function showCatalogueAge() {
+  if (!state.catalogue.length) { $('addScanInfo').textContent = 'PosPort not checked'; return; }
+  const mins = state.catalogueAt ? Math.round((Date.now() - state.catalogueAt) / 60000) : null;
+  const age = mins === null ? '' : mins < 2 ? ' (read just now)' : mins < 90 ? ' (read ' + mins + ' min ago)' : ' (read ' + Math.round(mins / 60) + ' h ago – press ↻ if you added items since)';
+  $('addScanInfo').textContent = 'Checked against ' + state.catalogue.length + ' PosPort items' + age;
+}
+setInterval(() => { if (state.catalogue.length) showCatalogueAge(); }, 60000);
+
+// Read the PosPort list again and sort every row again (new / in PosPort) – no shop look-ups needed.
+async function recheckPos(quiet) {
+  await scanCatalogue();
+  let moved = 0, newNow = 0;
+  state.add.forEach((r) => {
+    if (r.status === 'created' || r.status === 'waiting' || r.updated === true) return;
+    if (r.pos) {               // already in PosPort: refresh its price, or move it back to new if it was deleted
+      const c = catalogueEntry(r.pos) || (r.barcode && state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, r.barcode)));
+      if (c) { r.pos.price = c.price; r.pos.name = c.name; r.chk = R.checkExistingPrice(c.price, r.highest, S); }
+      return;
+    }
+    if (r.notInPos) return;    // you said "No, it's new"
+    const found = findInPos(r);
+    if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how + ' (re-check)'; moved++; }
+    else { newNow++; if (found.maybe) r.maybe = found.maybe; }
+  });
+  showCatalogueAge(); renderAdd(); saveState();
+  if (!quiet || moved) log('PosPort re-checked: ' + moved + ' items were already in PosPort and moved there, ' + newNow + ' are really new.', 'ok');
+  return moved;
+}
+$('addRecheck').addEventListener('click', async () => {
+  setBusy(true);
+  try { await recheckPos(false); } finally { setBusy(false); }
+});
+
 async function ensureCatalogue() {
   const age = state.catalogueAt ? (Date.now() - state.catalogueAt) / 3600000 : Infinity;
   if (state.catalogue.length && age < 12) return true;
@@ -1024,7 +1057,7 @@ async function startLookup(again) {
   lookupRunning = true;
   try {
     await ensureCatalogue();
-    $('addScanInfo').textContent = state.catalogue.length ? 'Checked against ' + state.catalogue.length + ' PosPort items' : 'PosPort not checked';
+    showCatalogueAge();
     let n = 0;
     const tried = new Set();
     // Every file moves forward at the same time: every other look-up goes to the file you have open,
@@ -1285,6 +1318,14 @@ async function runCreate(retry, fid) {
     renderAdd(); saveState();
     setBusy(true);
     try { if (await posTabOnBulk()) await discardBulk(); } finally { setBusy(false); }
+  }
+  // never make duplicates: if the PosPort list is more than an hour old, read it again first
+  if (!retry && state.catalogue.length && (Date.now() - (state.catalogueAt || 0)) > 3600000) {
+    log('Your PosPort list is more than an hour old – reading it again first so nothing is created twice…');
+    setBusy(true);
+    let moved = 0;
+    try { moved = await recheckPos(true); } finally { setBusy(false); }
+    if (moved && !confirm(moved + ' of these items are already in PosPort (added since the bot last looked) and were moved to "Already in PosPort". Create the rest now?')) return;
   }
   const todo = state.add.filter((r) => inFile(r) && !r.pos && r.use !== false && (r.status === 'ready' || r.status === 'check') && r.name && r.price > 0 && r.category);
   const skipped = state.add.filter((r) => inFile(r) && !r.pos && r.use !== false && !todo.includes(r) && !['created', 'filled', 'exists', 'in PosPort'].includes(r.status)).length;
@@ -2717,7 +2758,7 @@ function refreshButtons() {
   fillSettings();
   if (state.catalogue.length) $('chkScanInfo').textContent = state.catalogue.length + ' items from last scan';
   if (state.checkInput.length) $('chkFileInfo').textContent = state.checkInput.length + ' items loaded';
-  renderAdd(); renderCheck(); refreshButtons();
+  renderAdd(); renderCheck(); refreshButtons(); showCatalogueAge();
   loadTkOpts(); renderTickets(); renderBuy(); renderInvoices();
   log('Ready. Keep PosPort Back Office logged in, in this Chrome window.');
   // carry on with items that were still waiting when the bot was closed or reloaded
