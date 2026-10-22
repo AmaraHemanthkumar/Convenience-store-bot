@@ -579,6 +579,7 @@ function addStatusPill(r) {
     return '<span class="pill idle">in PosPort</span>';
   }
   if (r.looking) return '<span class="pill idle">looking up…</span>';
+  if (r.status === 'created' && r.dupNote) return '<span class="pill bad">created – duplicate?</span><span class="sub why-new">' + esc(r.dupNote) + '</span>';
   const map = { waiting: 'idle', ready: 'ok', check: 'warn', 'not found': 'bad', created: 'ok', filled: 'warn', error: 'bad', skipped: 'idle' };
   return '<span class="pill ' + (map[r.status] || 'idle') + '" title="' + esc(r.note || '') + '">' + esc(r.status === 'ready' ? 'new – ready' : r.status) + '</span>' +
     (r.whyNew && r.status !== 'created' && r.status !== 'waiting' ? '<span class="sub why-new">why new: ' + esc(r.whyNew) + '</span>' : '');
@@ -1124,6 +1125,22 @@ function posByBarcode(bc) {
   if (!k) return null;
   return state.catalogue.find((c) => (c.barcodes && c.barcodes.length ? c.barcodes : [c.barcode]).some((b) => b && R.cleanBarcode(b).replace(/^0+/, '') === k)) || null;
 }
+const bcKey = (b) => R.cleanBarcode(b || '').replace(/^0+/, '');
+const itemBarcodes = (c) => (c.barcodes && c.barcodes.length ? c.barcodes : [c.barcode]).filter(Boolean);
+// every PosPort item with this barcode (more than one = a duplicate: the till only uses one of them)
+function posAllByBarcode(bc) {
+  const k = bcKey(bc);
+  return k ? state.catalogue.filter((c) => itemBarcodes(c).some((b) => bcKey(b) === k)) : [];
+}
+function catalogueDuplicates() {
+  const by = new Map();
+  state.catalogue.forEach((c) => new Set(itemBarcodes(c).map(bcKey)).forEach((k) => {
+    if (k.length < 8) return;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(c);
+  }));
+  return Array.from(by.entries()).filter(([, list]) => list.length > 1).map(([barcode, items]) => ({ barcode, items }));
+}
 // How many PosPort items have a real barcode (8-14 digits with a correct check digit)?
 function catalogueBarcodeStats() {
   const list = state.catalogue || [];
@@ -1141,8 +1158,18 @@ setInterval(() => { if (state.catalogue.length) showCatalogueAge(); }, 60000);
 // Read the PosPort list again and sort every row again (new / in PosPort) – no shop look-ups needed.
 async function recheckPos(quiet, insideJob) {
   await scanCatalogue(insideJob);
-  let moved = 0, newNow = 0, demoted = 0;
+  let moved = 0, newNow = 0, demoted = 0, dupRows = 0;
+  // the same barcode on two or more PosPort items (e.g. an item created again under another name)
+  state.posDupes = catalogueDuplicates();
   state.add.forEach((r) => {
+    if (r.status === 'created' && r.barcode) {
+      const all = posAllByBarcode(r.barcode);
+      const other = all.filter((c) => nameKey(c.name) !== nameKey(r.name));
+      r.dupNote = all.length > 1
+        ? 'PosPort has ' + all.length + ' items with this barcode: ' + all.map((c) => '"' + c.name + '" ' + m(c.price)).join(' · ') + ' – the till uses one of them. Delete the extra one in the Back Office.'
+        : (all.length === 1 && other.length ? 'In PosPort this barcode is "' + other[0].name + '" ' + m(other[0].price) : null);
+      if (r.dupNote) dupRows++;
+    }
     if (r.status === 'created' || r.status === 'waiting' || r.updated === true) return;
     if (r.pos && !r.locked) {   // already in PosPort: refresh its price
       const byBc = r.barcode && posByBarcode(r.barcode);
@@ -1167,10 +1194,25 @@ async function recheckPos(quiet, insideJob) {
     else { newNow++; r.whyNew = found.why; if (found.maybe) r.maybe = found.maybe; }
   });
   showCatalogueAge(); renderAdd(); saveState();
+  if (state.posDupes.length) log(state.posDupes.length + ' barcodes are on more than one PosPort item (the till only uses one of them)' + (dupRows ? ', ' + dupRows + ' of them created from this list' : '') +
+    ' – press "Duplicates" to download the list, then delete the extra items in the Back Office.', 'err');
+  refreshButtons();
   if (!quiet || moved || demoted) log('PosPort re-checked: ' + moved + ' items were already in PosPort and moved there, ' + newNow + ' are new' +
     (demoted ? ', ' + demoted + ' had only matched by name (their barcode is not in PosPort) – each shows "Already in PosPort as …?" to confirm' : '') + '.', 'ok');
   return moved;
 }
+$('addDupes').addEventListener('click', () => {
+  const d = state.posDupes || [];
+  if (!d.length) { log('No duplicate barcodes in PosPort (press ↻ Re-check PosPort first).'); return; }
+  const made = new Set(state.add.filter((r) => r.status === 'created').map((r) => nameKey(r.name)));
+  const rows = [];
+  d.forEach((g) => g.items.forEach((c, i) => rows.push({
+    Barcode: g.barcode, 'PosPort item': c.name, 'Price $': c.price, Category: c.category || '',
+    'Created by the bot': made.has(nameKey(c.name)) ? 'yes' : '', 'Keep / delete': '', 'Item id': c.id || '', Group: i === 0 ? d.indexOf(g) + 1 : '',
+  })));
+  writeSheet(rows, 'posport-duplicate-barcodes-' + today() + '.xlsx', 'Duplicates');
+  log(d.length + ' duplicate barcodes downloaded. Decide which item to keep, then delete the other one in the Back Office (the bot never deletes items).', 'ok');
+});
 $('addRecheck').addEventListener('click', () => posJob('re-checking PosPort', () => recheckPos(false, true)));
 
 async function ensureCatalogue() {
@@ -1504,6 +1546,9 @@ async function runCreate(retry, fid) {
   const todoKeys = new Set();
   const todo = state.add.filter((r) => {
     if (!(inFile(r) && !r.pos && r.use !== false && (r.status === 'ready' || r.status === 'check') && r.name && r.price > 0 && r.category)) return false;
+    // last safety net: this barcode is already on a PosPort item – never create it twice
+    const there = r.barcode && posByBarcode(r.barcode);
+    if (there && !r.notInPos) { markInPos(r, there); r.status = 'in PosPort'; r.note = 'barcode already in PosPort as "' + there.name + '" – not created'; return false; }
     const k = sameItem(r);
     if (doneKeys.has(k) || todoKeys.has(k)) { r.status = 'created'; r.note = 'same item as in another file – created once'; return false; }
     todoKeys.add(k); return true;
@@ -3066,6 +3111,8 @@ function refreshButtons() {
   $('chkExport').disabled = !state.check.length;
   $('chkApply').disabled = !state.check.some((r) => r.apply);
   $('addFailed').disabled = !state.add.some((r) => ADD_FAILED.includes(r.status));
+  $('addDupes').disabled = !(state.posDupes && state.posDupes.length);
+  $('addDupes').textContent = 'Duplicates' + (state.posDupes && state.posDupes.length ? ' (' + state.posDupes.length + ')' : '');
   $('chkFailed').disabled = !state.check.some((r) => r.status === 'NO DATA' || r.applied === false || !r.posName);
   $('lblFailed').disabled = !(state.labels || []).some((r) => r.status === 'failed');
 }
@@ -3075,6 +3122,7 @@ function refreshButtons() {
   fillSettings();
   if (state.catalogue.length) $('chkScanInfo').textContent = state.catalogue.length + ' items from last scan';
   if (state.checkInput.length) $('chkFileInfo').textContent = state.checkInput.length + ' items loaded';
+  state.posDupes = catalogueDuplicates();
   renderAdd(); renderCheck(); refreshButtons(); showCatalogueAge();
   loadTkOpts(); renderTickets(); renderBuy(); renderInvoices();
   log('Ready. Keep PosPort Back Office logged in, in this Chrome window.');

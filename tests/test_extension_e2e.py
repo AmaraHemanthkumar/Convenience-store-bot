@@ -506,6 +506,21 @@ def main():
         page.click("#addFilter button[data-f=all]")
         wait_until(page, lambda: page.locator("#addTable .why-new").count() > 0, 10000)
         print("why new example:", page.locator("#addTable .why-new").first.inner_text())
+        # the same barcode on two PosPort items (an old name + the one the bot created): Re-check finds it
+        pos.evaluate("""() => { const s = JSON.parse(localStorage.getItem('__csb_items'));
+          s[120] = {id: '120', name: 'Nestle Kit Kat Chunky 70g', price: 6.0, barcode: '9300605094703', barcodes: ['9300605094703']};
+          s[121] = {id: '121', name: 'KitKat Chunky King (old)', price: 2.99, barcode: '9300605094703', barcodes: ['9300605094703']};
+          localStorage.setItem('__csb_items', JSON.stringify(s)); }""")
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.click("#addRecheck")
+        wait_until(page, lambda: "PosPort re-checked" in page.inner_text("#log"), 120000)
+        print("duplicates:", [l for l in page.inner_text("#log").split("\n") if "more than one" in l][:1], "|", page.inner_text("#addDupes"))
+        assert "1 barcodes are on more than one PosPort item" in page.inner_text("#log")
+        with page.expect_download() as dl:
+            page.click("#addDupes")
+        dws = load_workbook(save_xlsx(dl.value)).active
+        print("duplicates sheet:", [[c.value for c in r][:5] for r in dws.iter_rows(min_row=2)])
+        assert dws.max_row == 3
         assert errors == [], errors
         ctx.close()
     print("extension end-to-end test passed")
