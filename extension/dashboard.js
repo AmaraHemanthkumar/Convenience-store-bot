@@ -1881,6 +1881,10 @@ async function scanCatalogueNow() {
     if (!(await posGo('/catalog/items', 'items'))) { log('Items page did not open.', 'err'); return; }
     const cl = await pos('clearListSearch', S.delayMs);
     if (cl && cl.cleared) await sleep(1500);
+    await pos('setRowsPerPage', 50, S.delayMs);            // 50 rows a page: far fewer pages to turn
+    await sleep(800);
+    const lt0 = await pos('listTotal');
+    const lastPage = lt0 && lt0.pages;                       // PosPort shows the last page number (e.g. 24)
     const seen = new Map();
     let pagesRead = 0, stoppedEarly = false;
     for (let page = 1; page <= 400; page++) {
@@ -1893,8 +1897,9 @@ async function scanCatalogueNow() {
       let nx = await pos('nextPage', S.delayMs);
       // a slow page is tried again (up to 3 times) instead of being taken as the end of the list
       for (let t = 0; t < 3 && nx && nx.slow; t++) { await sleep(2000); nx = await pos('nextPage', S.delayMs + 1000); }
-      if (!nx || !nx.ok) { stoppedEarly = !!(nx && nx.slow); break; }
+      if (!nx || !nx.ok) { stoppedEarly = !!(nx && nx.slow) || (lastPage && page < lastPage); break; }
     }
+    await sleep(1500);                                       // let the last page's item data arrive
     const shown = await pos('listTotal');
     const said = shown && shown.total;
     const cap = await pos('captured');

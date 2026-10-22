@@ -402,7 +402,8 @@
 
   async function nextPage(delay) {
     const cands = Array.from(document.querySelectorAll('button,a,li,[role="button"]')).filter(visible);
-    let next = cands.find((b) => /next/i.test(b.getAttribute('aria-label') || '') || /^(›|>|»|next)$/i.test(norm(b.textContent)));
+    let next = document.querySelector('[data-testid="next-button"]') ||
+      cands.find((b) => /next/i.test(b.getAttribute('aria-label') || '') || /^(›|>|»|next)$/i.test(norm(b.textContent)));
     if (!next) return { ok: false, last: true };
     const disabled = next.disabled || next.getAttribute('aria-disabled') === 'true' || /disabled/.test(next.className);
     if (disabled) return { ok: false, last: true };
@@ -425,13 +426,30 @@
     return { ok: true, cleared: true };
   }
 
-  // "Showing 1-20 of 812", "812 items", "Page 1 of 41" … – how many items PosPort says it has
+  // Show the most rows per page PosPort offers (50): 24 pages instead of 117 for ~1,170 items
+  async function setRowsPerPage(want, delay) {
+    const sel = document.querySelector('[data-testid="hidden-select-container"] select') ||
+      Array.from(document.querySelectorAll('select')).find((s) => Array.from(s.options).some((o) => o.value === String(want)));
+    if (!sel) return { ok: false, error: 'no rows-per-page box' };
+    const best = Array.from(sel.options).map((o) => Number(o.value)).filter((n) => n > 0 && n <= want).sort((a, b) => b - a)[0];
+    if (!best || String(sel.value) === String(best)) return { ok: true, rows: Number(sel.value) };
+    const before = listRows().length;
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, String(best));
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => listRows().length !== before, 6000);
+    await sleep(delay || 600);
+    return { ok: true, rows: best };
+  }
+
+  // "Showing 1-20 of 812", "812 items", "Page 1 of 41", page buttons 1…24 – how big PosPort says the list is
   function listTotal() {
+    const btns = Array.from(document.querySelectorAll('[data-testid^="page-button-"], nav[aria-label="pagination"] button')).map((b) => Number(norm(b.textContent))).filter((n) => n > 0);
+    const lastPage = btns.length ? Math.max.apply(null, btns) : null;
     const txt = norm(document.body.innerText || '');
     let m = txt.match(/\bof\s+([\d,]+)\s*(items|products|results|entries|records)?\b/i);
     const total = m ? Number(m[1].replace(/,/g, '')) : null;
     m = txt.match(/\bpage\s+\d+\s+of\s+(\d+)/i);
-    return { ok: true, total, pages: m ? Number(m[1]) : null };
+    return { ok: true, total, pages: m ? Number(m[1]) : lastPage };
   }
 
   async function openItem(name, delay) {
@@ -555,7 +573,7 @@
 
   root.CSB_POSPORT = {
     SEL, applyOverrides, pageInfo, bulkStatus, ensureRows, fillBulkRow, bulkGetCategories, clickCreate, cancelBulk,
-    readListRows, searchList, tickRow, clickPrintLabels, nextPage, clearListSearch, listTotal, openItem, readEditPrice, setEditPrice, setEditFields,
+    readListRows, searchList, tickRow, clickPrintLabels, nextPage, clearListSearch, setRowsPerPage, listTotal, openItem, readEditPrice, setEditPrice, setEditFields,
     captured, clearCaptured, toasts, menuLinks, readTable,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
