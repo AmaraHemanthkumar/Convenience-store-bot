@@ -38,3 +38,8 @@ assert.ok(Math.abs(inv.total - 140.98) < 0.05, inv.total);
 assert.strictEqual(I.tidyName('SMT CRINKLE 90G ORIGINAL (18)'), 'Smiths Crinkle Original 90g');
 assert.strictEqual(I.tidyName('NES KIT KAT CHUNKY KING 70G'), 'Nestle Kit Kat Chunky King 70g');
 console.log('invoice tests passed');
+// Woolworths PDFs split "ff"/"fi"/"fl" into their own word
+assert.strictEqual(I.fixLigatures("Ra ff erty's garden happy tummies star pu ff s pear & mango 12g"), "Rafferty's garden happy tummies star puffs pear & mango 12g");
+assert.strictEqual(I.fixLigatures("Hershey's syrup chocolate fl avoured topping 425g"), "Hershey's syrup chocolate flavoured topping 425g");
+assert.strictEqual(I.fixLigatures('Easy-o ff oven & bbq everyday cleaner spray 750ml'), 'Easy-off oven & bbq everyday cleaner spray 750ml');
+console.log('ligature tests passed');

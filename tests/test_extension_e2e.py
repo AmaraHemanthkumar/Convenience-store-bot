@@ -553,6 +553,20 @@ def main():
         dws = load_workbook(save_xlsx(dl.value)).active
         print("duplicates sheet:", [[c.value for c in r][:5] for r in dws.iter_rows(min_row=2)])
         assert dws.max_row == 3
+        # Combine all files: one Excel, one line per product across every file, decided by barcode
+        page.evaluate("document.getElementById('log').textContent = ''")
+        with page.expect_download() as dl:
+            page.click("#addCombine")
+        cwb = load_workbook(save_xlsx(dl.value))
+        print("combine sheets:", cwb.sheetnames, "|", [l for l in page.inner_text("#log").split("\n") if "Combined" in l][:1])
+        assert cwb.sheetnames[:5] == ["Summary", "All products", "New – create these", "Check these", "Already in Back Office"], cwb.sheetnames
+        allp = [[c.value for c in r] for r in cwb["All products"].iter_rows(min_row=2)]
+        stats = sorted(set(r[0] for r in allp))
+        print("combine statuses:", stats, "products:", len(allp))
+        assert allp and all(s[:1] in ("✅", "🆕", "⚠") for s in stats), stats
+        keys = [r[1] or r[2] for r in allp]
+        assert len(keys) == len(set(keys)), "a product is listed twice"
+        assert cwb["Back Office list"].max_row - 1 == 8, cwb["Back Office list"].max_row
         assert errors == [], errors
         ctx.close()
     print("extension end-to-end test passed")

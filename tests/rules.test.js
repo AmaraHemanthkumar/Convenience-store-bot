@@ -63,3 +63,24 @@ assert.strictEqual(R.newItemPrice(2.0, { markup: 1.5, markupPct: 20 }), 3.9);
 assert.strictEqual(R.newItemPrice(5.0, { markup: 0, markupPct: 30 }), 6.5);
 assert.strictEqual(R.checkExistingPrice(3.0, 2.0, { markup: 1.5, markupPct: 20 }).suggested, 3.9);
 console.log('rules tests passed');
+
+// ---- matching rules learned from the real Woolworths / Coles / Back Office cross-check ----
+{
+  const R2 = require('../extension/core/rules.js');
+  const A = require('assert');
+  // a shop's carton code (GTIN-14) gives the single item's barcode
+  A.strictEqual(R2.unitBarcode('19310012021046'), '9310012021049');
+  A.strictEqual(R2.unitBarcode('9310012021049'), '');
+  // same product: brand, size and pack count must agree
+  A.strictEqual(R2.sameProduct('Gravox brown onion liquid gravy pouch 165g', 'Gravox Brown Onion Liquid Gravy Pouch 165g'), true);
+  A.strictEqual(R2.sameProduct('Fanta orange soft drink cans 375ml x 24 pack', 'Fanta Orange Soft Drink Cans 375mL x 24 pack'), true);
+  A.strictEqual(R2.sameProduct('Coca-Cola Classic Soft Drink Multipack Cans 375ml', 'Coca-Cola Classic Soft Drink Cans 375mL x 30 pack'), false);
+  A.strictEqual(R2.sameProduct('Burger Rings Snacks 90g', 'Burger Rings Snacks 90g 5 pack'), false);
+  A.strictEqual(R2.sameProduct('Vittoria Latte Coffee Sachets 8 Pack', 'Nescafe Creamy Coconut Latte Coffee Sachets 8 pack'), false);
+  A.strictEqual(R2.sameProduct('Sharwoods simmer sauce butter chicken 420g', "Patak's Mild Butter Chicken Simmer Sauce 450g"), false);
+  A.strictEqual(R2.sameProduct('Coca-Cola Zero Sugar Zero Caffeine Soft Drink Bott', 'Coca-Cola Zero Sugar Zero Caffeine Bottle 600mL'), false);  // size cut off the invoice
+  // the very same name = the same item kept under another barcode
+  A.strictEqual(R2.sameName('MasterFoods Tomato Sauce 500mL', 'Masterfoods tomato sauce 500ml'), true);
+  A.strictEqual(R2.sameName('Heinz Baked Beans 420g', 'Heinz Baked Beans BBQ Sauce 420g'), false);
+  console.log('matching rules: ok');
+}

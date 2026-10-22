@@ -1186,6 +1186,12 @@ function findInPos(r) {
   // a name match is only offered as "Already in PosPort as …?" – it never decides on its own.
   const st = barcodeStatsCached();
   const byBarcode = (S.matchBy || 'barcode') === 'barcode' && r.barcode && st.real >= st.total * 0.5;
+  // exactly the same name (and size) as a PosPort item: it's in PosPort, kept under another barcode
+  // (e.g. Woolworths lists a different barcode for the same Masterfoods sauce)
+  for (const n of names) {
+    const same = state.catalogue.find((c) => R.sameName(n, c.name));
+    if (same) return { item: same, exact: true, how: 'the same name (PosPort has it under barcode ' + (same.barcode || 'none') + ')' };
+  }
   let best = null;
   for (const n of names) {
     const mm = R.posMatch(n, state.catalogue, (c) => c.name);
@@ -1206,17 +1212,20 @@ function barcodeStatsCached() {
 }
 
 // A PosPort item with this barcode (any of its barcodes – an item can have several, e.g. one per variant)
+// A carton code (GTIN-14, e.g. from a shop's website) also finds the single item's barcode.
 function posByBarcode(bc) {
-  const k = R.cleanBarcode(bc || '').replace(/^0+/, '');
-  if (!k) return null;
-  return state.catalogue.find((c) => (c.barcodes && c.barcodes.length ? c.barcodes : [c.barcode]).some((b) => b && R.cleanBarcode(b).replace(/^0+/, '') === k)) || null;
+  return posAllByBarcode(bc)[0] || null;
 }
 const bcKey = (b) => R.cleanBarcode(b || '').replace(/^0+/, '');
 const itemBarcodes = (c) => (c.barcodes && c.barcodes.length ? c.barcodes : [c.barcode]).filter(Boolean);
 // every PosPort item with this barcode (more than one = a duplicate: the till only uses one of them)
 function posAllByBarcode(bc) {
   const k = bcKey(bc);
-  return k ? state.catalogue.filter((c) => itemBarcodes(c).some((b) => bcKey(b) === k)) : [];
+  if (!k) return [];
+  const hit = (key) => state.catalogue.filter((c) => itemBarcodes(c).some((b) => bcKey(b) === key));
+  const list = hit(k);
+  const unit = R.unitBarcode(bc);
+  return list.length || !unit ? list : hit(bcKey(unit));
 }
 function catalogueDuplicates() {
   const by = new Map();
@@ -1276,7 +1285,7 @@ async function recheckPos(quiet, insideJob) {
     }
     if (r.notInPos) return;    // you said "No, it's new"
     const found = findInPos(r);
-    if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how + ' (re-check)'; moved++; }
+    if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how + ' (re-check)'; if (found.exact) r.yesSame = true; moved++; }
     else { newNow++; r.whyNew = found.why; if (found.maybe) r.maybe = found.maybe; }
   });
   showCatalogueAge(); renderAdd(); saveState();
@@ -1299,6 +1308,7 @@ $('addDupes').addEventListener('click', () => {
   writeSheet(rows, 'posport-duplicate-barcodes-' + today() + '.xlsx', 'Duplicates');
   log(d.length + ' duplicate barcodes downloaded. Decide which item to keep, then delete the other one in the Back Office (the bot never deletes items).', 'ok');
 });
+$('addCombine').addEventListener('click', () => { try { combineAll(); } catch (e) { log('Combine failed: ' + e.message, 'err'); } });
 $('addRecheck').addEventListener('click', () => posJob('re-checking PosPort', () => recheckPos(false, true)));
 
 async function ensureCatalogue() {
@@ -1367,10 +1377,14 @@ async function startLookup(again) {
 let lookupStop = false;
 $('addLookup').addEventListener('click', () => startLookup(true));
 
-// a shop result we trust enough to copy its barcode: matched by barcode, the only result, or a name match of 70%+
-function strongMatch(x) {
+// a shop result we trust enough to copy its barcode: matched by barcode, or – when we know the invoice / sheet
+// name – the same brand, size and pack count with the names covering each other (a 10-pack is not a 30-pack,
+// Vittoria is not Nescafé). Without a name to compare: the only result, or a name match of 70%+.
+function strongMatch(x, invName) {
   const mm = String((x && x.match) || '');
-  if (mm === 'barcode' || /^only result/.test(mm)) return true;
+  if (mm === 'barcode') return true;
+  if (invName && x && x.name) return R.sameProduct(invName, x.name);
+  if (/^only result/.test(mm)) return true;
   const pct = Number((mm.match(/(\d+)%/) || [])[1]);
   return pct >= 70;
 }
@@ -1435,7 +1449,8 @@ async function lookupOne(r) {
   r.storePending = ['ww', 'coles'].filter((k) => res[k] && (res[k].paused || res[k].off));      // that shop was paused or off: ask it later
   const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
   // a line from a Woolworths / Coles invoice has no barcode: take it from the shop's product
-  if (!r.barcode && src && src.barcode && strongMatch(src)) { r.barcode = R.cleanBarcode(src.barcode); r.barcodeFrom = src === res.ww ? 'Woolworths' : 'Coles'; }
+  if (!r.barcode && src && src.barcode && strongMatch(src, r.inName || r.hint)) { r.barcode = R.cleanBarcode(src.barcode); r.barcodeFrom = src === res.ww ? 'Woolworths' : 'Coles'; }
+  else if (!r.barcode && src && src.barcode) r.barcodeMaybe = { barcode: R.cleanBarcode(src.barcode), name: src.name, store: src.store };
   r.inv = invoiceFor(r.barcode, [r.hint, r.inName, r.name]);
   const nameSrc = src || r.net;
   if (nameSrc && !r.inName && !r.nameEdited) setNames(r, nameSrc.name, nameSrc.size);
@@ -1451,7 +1466,7 @@ async function lookupOne(r) {
   else if (!res.highest) { r.status = 'not found'; r.note = 'No price at Woolworths or Coles' + (r.net ? ' (name from ' + r.net.source + ')' : r.name ? ' (name from your sheet)' : ''); }
   else { r.status = unsure ? 'check' : 'ready'; r.note = unsure ? 'Matched by name – please check it is the same product' : ''; }
   const found = r.notInPos ? { item: null } : findInPos(r);
-  if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how; }
+  if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how; if (found.exact) r.yesSame = true; }
   else { if (found.maybe) r.maybe = found.maybe; r.whyNew = found.why; }
 }
 
@@ -1775,6 +1790,95 @@ function readableRow(r) {
     Status: r.locked ? 'sending' : (r.updated === true ? 'saved in PosPort' : r.status || ''), Note: r.note || '',
   };
 }
+// ---- Combine all files: one line per product across every loaded file, decided by barcode ----
+// ✅ in the Back Office (by barcode – a carton code finds the single item too – or by the very same name),
+// 🆕 new (a barcode that is not in the Back Office, from the sheet / supplier invoice or a sure shop match),
+// ⚠️ check (no barcode, a shop match that is not sure, or a near-identical name already in the Back Office).
+function combineStatus(r) {
+  const posName = (c) => ({ posName: c.name, posPrice: c.price, posBarcode: c.barcode || '' });
+  if (r.status === 'created') return Object.assign({ status: '✅ Created by the bot' }, r.pos ? posName(r.pos) : {});
+  const all = r.barcode ? posAllByBarcode(r.barcode) : [];
+  if (all.length) return Object.assign({ status: '✅ In Back Office', dupes: all.length }, posName(all[0]), { posName: all.map((c) => c.name).join(' | ') });
+  const f = findInPos(r);
+  if (f.item && f.exact) return Object.assign({ status: '✅ In Back Office (other barcode)' }, posName(f.item));
+  if (r.pos && (r.yesSame || !r.barcode)) return Object.assign({ status: '✅ In Back Office (you confirmed the name)' }, posName(r.pos));
+  if (!r.barcode) return { status: r.barcodeMaybe ? '⚠️ Check – shop match unsure' : '⚠️ Check – no barcode', hint: f.maybe ? f.maybe.name + ' ' + m(f.maybe.price) : '' };
+  if (!R.validBarcode(r.barcode)) return { status: '⚠️ Check – barcode looks mistyped' };
+  if (f.maybe && f.maybe.score >= 0.85) return { status: '⚠️ Check – similar name in Back Office', hint: f.maybe.name + ' (' + (f.maybe.barcode || 'no barcode') + ') ' + m(f.maybe.price) };
+  return { status: '🆕 New', hint: f.maybe ? f.maybe.name + ' ' + m(f.maybe.price) : '' };
+}
+function combineAll() {
+  const files = (state.files || []).filter((f) => state.add.some((r) => (r.fileId || 'old') === f.id));
+  if (!files.length) { log('Load your sheets / invoices first, then press "Combine all files".', 'err'); return; }
+  if (!state.catalogue.length) { log('The bot has not read your Back Office list yet – press ↻ Re-check PosPort first.', 'err'); return; }
+  const fileName = new Map(files.map((f) => [f.id, f.name]));
+  const prod = new Map();
+  state.add.forEach((r) => {
+    const name = r.inName || r.hint || r.name || '';
+    const shop = (r.ww && r.ww.found && r.ww) || (r.coles && r.coles.found && r.coles) || null;
+    const key = r.barcode ? 'b:' + bcKey(r.barcode) : 'n:' + nameKey(name || r.name || '');
+    if (key === 'n:') return;
+    const st = combineStatus(r);
+    let p = prod.get(key);
+    if (!p) {
+      p = { st, barcode: r.barcode || '', name, shopName: shop ? shop.name : (r.barcodeMaybe ? r.barcodeMaybe.name + ' (not sure)' : ''),
+        shopPrice: r.highest || '', costs: [], files: new Set(), from: r.barcodeFrom ? 'barcode from ' + r.barcodeFrom : (r.barcode ? 'sheet / invoice barcode' : '') };
+      prod.set(key, p);
+    } else if (st.status.startsWith('✅') && !p.st.status.startsWith('✅')) p.st = st;
+    if (!p.name && name) p.name = name;
+    if (!p.shopName && shop) p.shopName = shop.name;
+    if (r.inv && r.inv.unitCost) p.costs.push(r.inv.unitCost);
+    p.files.add(fileName.get(r.fileId || 'old') || '');
+  });
+  const order = (s) => (s.startsWith('🆕') ? 0 : s.startsWith('⚠') ? 1 : 2);
+  const list = [...prod.values()].sort((a, b) => order(a.st.status) - order(b.st.status) || String(a.name).localeCompare(String(b.name)));
+  const line = (p) => {
+    const cost = p.costs.length ? R.round2(p.costs.reduce((a, b) => a + b, 0) / p.costs.length) : '';
+    const bp = Number(p.st.posPrice), sp = Number(p.shopPrice);
+    const note = p.st.dupes > 1 ? 'barcode is on ' + p.st.dupes + ' Back Office items'
+      : p.st.posPrice === 0 ? 'Back Office price is $0'
+      : bp && sp && bp < sp ? 'below the shops by $' + (sp - bp).toFixed(2) : '';
+    return {
+      Status: p.st.status, Barcode: p.barcode, 'Invoice / sheet name': p.name, 'Back Office name': p.st.posName || '',
+      'Back Office price': p.st.posPrice === undefined ? '' : p.st.posPrice, 'Back Office barcode': p.st.posBarcode || '',
+      'Shop product': p.shopName, 'Shop normal price': p.shopPrice, 'Unit cost': cost, 'Barcode from': p.from,
+      Files: [...p.files].filter(Boolean).join(', '), 'Similar Back Office item': p.st.hint || '', 'Price note': note,
+    };
+  };
+  const rows = list.map(line);
+  const wb = XLSX.utils.book_new();
+  const add = (name, data, widths) => {
+    const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ '': 'nothing here' }]);
+    ws['!cols'] = widths.map((w) => ({ wch: w }));
+    if (data.length) ws['!autofilter'] = { ref: ws['!ref'] };
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  };
+  const W = [30, 16, 46, 36, 10, 16, 46, 10, 9, 22, 40, 44, 28];
+  const count = {};
+  rows.forEach((x) => { count[x.Status] = (count[x.Status] || 0) + 1; });
+  const summary = [['Combined check – every product from every loaded file, decided by barcode'], [],
+    ['Back Office items read', state.catalogue.length], ['Files', files.length], ['Products', rows.length], []]
+    .concat(Object.keys(count).sort((a, b) => order(a) - order(b)).map((k) => [k, count[k]]))
+    .concat([[], ['✅', 'already in the Back Office – nothing to create'], ['🆕', 'barcode not in the Back Office – create it'],
+      ['⚠️', 'no barcode, an unsure shop match, or a very similar name already in the Back Office – look at it first']]);
+  const ws0 = XLSX.utils.aoa_to_sheet(summary);
+  ws0['!cols'] = [{ wch: 44 }, { wch: 70 }];
+  XLSX.utils.book_append_sheet(wb, ws0, 'Summary');
+  add('All products', rows, W);
+  add('New – create these', rows.filter((x) => x.Status.startsWith('🆕')), W);
+  add('Check these', rows.filter((x) => x.Status.startsWith('⚠')), W);
+  add('Already in Back Office', rows.filter((x) => x.Status.startsWith('✅')), W);
+  const dd = [];
+  catalogueDuplicates().forEach((g) => g.items.forEach((c) => dd.push({ Barcode: g.barcode, 'Back Office name': c.name, Price: c.price, 'Keep / delete': '' })));
+  add('BO same barcode twice', dd, [16, 46, 10, 14]);
+  add('BO $0 items', state.catalogue.filter((c) => !Number(c.price)).map((c) => ({ Barcode: c.barcode || '', 'Back Office name': c.name, 'Price now': c.price, 'New price': '' })), [16, 46, 10, 12]);
+  const used = new Set(list.filter((p) => p.barcode).map((p) => bcKey(p.barcode)));
+  add('Back Office list', state.catalogue.slice().sort((a, b) => String(a.name).localeCompare(String(b.name))).map((c) => ({
+    Barcode: c.barcode || '', Name: c.name, Price: c.price, 'In a loaded file': itemBarcodes(c).some((b) => used.has(bcKey(b))) ? 'yes' : '' })), [16, 46, 10, 16]);
+  XLSX.writeFile(wb, 'combined-check-' + saveStamp() + '.xlsx');
+  log('Combined ' + files.length + ' files into ' + rows.length + ' products: ' + Object.keys(count).sort((a, b) => order(a) - order(b)).map((k) => count[k] + ' ' + k).join(', ') + ' (check your Downloads).', 'ok');
+}
+
 function saveWork(files) {
   files = files.filter(Boolean);
   if (!files.length) { log('Nothing to save – load a file first.', 'err'); return; }
@@ -3042,9 +3146,10 @@ $('buyLookup').addEventListener('click', async () => {
       const res = await lookupPrices(r.barcode, r.name);
       r.ww = res.ww; r.coles = res.coles;
       const src = (res.ww && res.ww.found && res.ww) || (res.coles && res.coles.found && res.coles);
+      const ownName = r.name;
       if (!r.name && src) r.name = src.name;
       // shop invoices have no barcodes: take it from the matching shop product, and teach the saved invoice
-      if (!r.barcode && src && src.barcode && strongMatch(src)) {
+      if (!r.barcode && src && src.barcode && strongMatch(src, ownName)) {
         r.barcode = R.cleanBarcode(src.barcode); r.barcodeFrom = src.store;
         const inv = r.invRef && (state.invoices || []).find((x) => x.id === r.invRef.id);
         if (inv && inv.items[r.invRef.k] && !inv.items[r.invRef.k].barcode) { inv.items[r.invRef.k].barcode = r.barcode; invIndex = null; }

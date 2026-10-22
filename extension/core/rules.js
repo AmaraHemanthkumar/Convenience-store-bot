@@ -418,6 +418,70 @@
     return out;
   }
 
+  // ---------- barcode from a carton code ----------
+  // Shops sometimes list the carton's GTIN-14 (leading 1-8). The single unit's GTIN-13 is the same
+  // digits without the first one, with a new check digit – that is the one on the till.
+  function unitBarcode(v) {
+    const d = cleanBarcode(v);
+    if (d.length !== 14 || !/^[1-8]/.test(d)) return '';
+    const body = d.slice(1, 13);
+    let sum = 0;
+    for (let i = 0; i < 12; i++) sum += Number(body[i]) * (i % 2 === 0 ? 1 : 3);
+    return body + String((10 - (sum % 10)) % 10);
+  }
+
+  // ---------- is a shop's product the same as an invoice line? ----------
+  const COVER_STOP = new Set(['and', 'with', 'the', 'soft', 'drink', 'in', 'of', 'pack', 'x', 'each']);
+  function coverWords(s) {
+    return String(s || '').toLowerCase().replace(/&/g, ' and ').replace(/[’'`]/g, '')
+      .replace(/(\d)\s+(g|kg|ml|l|pack|pk)\b/g, '$1$2').split(/[^a-z0-9.]+/).filter(Boolean);
+  }
+  function sizesIn(s) {
+    const out = new Set();
+    String(s || '').toLowerCase().replace(/(\d+(?:\.\d+)?)\s*(kg|g|ml|l)\b/g, (m, n, u) => {
+      let v = Number(n);
+      if (u === 'kg' || u === 'l') v *= 1000;
+      out.add(Math.round(v * 10) / 10 + (u === 'kg' || u === 'g' ? 'g' : 'ml'));
+      return m;
+    });
+    return out;
+  }
+  function packsIn(s) {
+    const out = new Set();
+    const re = /(\d+)\s*(?:pack|pk)\b|x\s*(\d+)\s*(?:pack|pk)?\b|\b(\d+)\s*x\s*\d/gi;
+    let m;
+    while ((m = re.exec(String(s || '')))) { const n = Number(m[1] || m[2] || m[3]); if (n > 1) out.add(n); }
+    return out;
+  }
+  // share of a's words found in b (a cut-off last word may be the start of one); a different size counts against it
+  function coverScore(a, b) {
+    const A = coverWords(a).filter((t) => !COVER_STOP.has(t) && !(t.length === 1 && /[a-z]/.test(t)));
+    const B = new Set(coverWords(b).filter((t) => !COVER_STOP.has(t)));
+    if (!A.length) return 0;
+    const Bl = [...B];
+    const hit = A.filter((t, i) => B.has(t) || (t.length > 4 && Bl.some((u) => u.startsWith(t.slice(0, 5)))) ||
+      (i === A.length - 1 && /^[a-z]{2,}$/.test(t) && Bl.some((u) => u.startsWith(t)))).length;
+    let s = hit / A.length;
+    const sa = sizesIn(a), sb = sizesIn(b);
+    if (sa.size && sb.size && ![...sa].some((x) => sb.has(x))) s *= 0.55;
+    return s;
+  }
+  // Safe to treat a shop's product as this invoice line (and use its barcode)? Same brand, same pack count,
+  // the size is there and agrees, and the names cover each other.
+  function sameProduct(invName, shopName) {
+    const a = coverWords(invName), b = coverWords(shopName);
+    if (!a.length || !b.length || a[0].slice(0, 4) !== b[0].slice(0, 4)) return false;
+    const pa = packsIn(invName), pb = packsIn(shopName);
+    if (pa.size !== pb.size || [...pa].some((x) => !pb.has(x))) return false;
+    const sa = sizesIn(invName), sb = sizesIn(shopName);
+    if (sb.size && ![...sa].some((x) => sb.has(x)) && !(pa.size && pb.size)) return false;
+    return coverScore(invName, shopName) >= 0.9 && coverScore(shopName, invName) >= 0.7;
+  }
+  // The very same name both ways (word order and case aside), e.g. an item kept in PosPort under another barcode
+  function sameName(a, b) {
+    return !!a && !!b && Math.min(coverScore(a, b), coverScore(b, a)) >= 0.99 && (sizesIn(a).size > 0) === (sizesIn(b).size > 0);
+  }
+
   // ---------- spreadsheet input ----------
   // rows: array of arrays (first row may be a header). Returns [{barcode, name, category, price, currentPrice}]
   function parseInputRows(rows) {
@@ -460,6 +524,7 @@
     DEFAULT_SETTINGS, DEFAULT_CATEGORIES, round2, parseMoney, money, regularPrice,
     highestPrice, newItemPrice, checkExistingPrice, cleanBarcode, sameBarcode, validBarcode,
     shortName, setAbbreviations, squeeze, unitPrice, guessCategory, similarity, bestMatch, posScore, posMatch, searchWords, sizeOf, parseInputRows, normaliseSize,
+    unitBarcode, coverScore, sameProduct, sameName,
   };
   root.CSB_RULES = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

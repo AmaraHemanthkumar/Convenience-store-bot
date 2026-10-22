@@ -146,13 +146,35 @@
     return col.ordered !== undefined && col.supplied !== undefined && (col.price !== undefined || col.amount !== undefined) ? col : null;
   }
 
+  // Woolworths PDFs draw "ff", "fi", "fl" as one glyph, which comes out as a separate word:
+  // "Ra ff erty's" -> "Rafferty's", "chocolate fl avoured" -> "chocolate flavoured", "mu ffi n" -> "muffin".
+  const LIG = new Set(['ff', 'fi', 'fl', 'ffi', 'ffl', 'ft']);
+  const LIG_STEMS = ['avour', 'ake', 'ip', 'ower', 'our', 'll', 'ed', 'ers', 'erty', 'ervescent', 'eine', 'er', 'ect', 'le', 'x', 'ills',
+    'lls', 'n', 's', 'ing', 'uff', 'at', 'ight', 'oat', 'esh', 'ow', 'ag', 'ies', 'y', 't', 'ield'];
+  function fixLigatures(s) {
+    const t = String(s || '').split(' ');
+    const out = [];
+    for (let i = 0; i < t.length; i++) {
+      const w = t[i];
+      if (!LIG.has(w)) { out.push(w); continue; }
+      let joined = w;
+      const prev = out.length ? out[out.length - 1] : '';
+      const tail = prev.split('-').pop().replace(/[^A-Za-z]/g, '');
+      if (prev && tail.length <= 4 && /[a-z]$/.test(prev)) joined = out.pop() + joined;
+      const next = t[i + 1] || '';
+      if (/^[a-z]/.test(next) && LIG_STEMS.some((st) => next.toLowerCase().startsWith(st))) { joined += next; i++; }
+      out.push(joined);
+    }
+    return out.join(' ');
+  }
+
   function parseTableInvoice(pages, lines) {
     const items = [];
     let col = null;
     let pending = null;          // description waiting for its numbers
     let orphan = null;           // numbers waiting for their description (printed slightly higher)
     const close = (desc, nums, extra) => {
-      const d = desc.replace(/^[*%#]\s*/, '').replace(/\s+/g, ' ').trim();
+      const d = fixLigatures(desc.replace(/^[*%#]\s*/, '').replace(/\s+/g, ' ').trim()).replace(/\s+pdm\b/gi, '').replace(/\s+/g, ' ').trim();
       if (!d) return;
       const ordered = nums.ordered, supplied = nums.supplied !== null ? nums.supplied : nums.ordered;
       const price = nums.price, amount = nums.amount !== null ? nums.amount : (price !== null && supplied !== null ? Math.round(price * supplied * 100) / 100 : null);
@@ -334,6 +356,6 @@
       .replace(/\b(\d+(?:\.\d+)?)(G|Kg|Ml|L|Pk|S)\b/gi, (m, n, u) => n + (u.toLowerCase() === 'l' ? 'L' : u.toLowerCase()));
   }
 
-  root.CSB_INVOICE = { parseLine, parseInvoice, parseTableInvoice, parseCcepInvoice, ccepName, ccepPack, piecesToRows, pdfToPages, pdfToLines, readPdf, tidyName };
+  root.CSB_INVOICE = { parseLine, parseInvoice, parseTableInvoice, parseCcepInvoice, ccepName, ccepPack, piecesToRows, pdfToPages, pdfToLines, readPdf, tidyName, fixLigatures };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.CSB_INVOICE;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
