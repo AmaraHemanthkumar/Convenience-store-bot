@@ -221,3 +221,4 @@ tr.locked input, tr.locked select, tr.locked button { pointer-events: none; }
 .ignored { opacity: .45; text-decoration: line-through; }
 .shop-ign { font-size: 11px; padding: 0 6px; margin-top: 3px; border: 1px solid #ddd; border-radius: 9px; background: #fff; cursor: pointer; color: #666; }
 .shop-ign:hover { border-color: var(--bad, #c8102e); color: var(--bad, #c8102e); }
+.fshop { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; margin-right: 6px; cursor: pointer; white-space: nowrap; }

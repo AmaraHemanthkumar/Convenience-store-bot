@@ -338,8 +338,22 @@ function savePriceCache(now) {
 }
 function clearPriceCache() { priceCache.clear(); chrome.storage.local.set({ priceCache: {} }); }
 let cacheHits = 0;
-async function lookupPrices(barcode, nameHint) {
+// skip = { ww: true } / { coles: true }: that shop is switched off for this file
+function applySkip(res, skip) {
+  if (!skip || (!skip.ww && !skip.coles)) return res;
+  const off = (k) => ({ found: false, off: true, label: STORES[k].label });
+  const out = Object.assign({}, res, { ww: skip.ww ? off('ww') : res.ww, coles: skip.coles ? off('coles') : res.coles });
+  out.highest = R.highestPrice(out.ww && out.ww.found ? out.ww.regular : null, out.coles && out.coles.found ? out.coles.regular : null);
+  return out;
+}
+async function lookupPrices(barcode, nameHint, skip) {
   const key = priceKey(barcode, nameHint);
+  if (skip && (skip.ww || skip.coles)) {
+    // a remembered full answer can still be used; otherwise only ask the shops that are on
+    const hit0 = key !== 'n:' && priceCache.get(key);
+    if (hit0 && Date.now() - hit0.at < PRICE_CACHE_HOURS * 3600000) { cacheHits++; return applySkip(JSON.parse(JSON.stringify({ ww: hit0.ww, coles: hit0.coles, highest: hit0.highest, cached: true })), skip); }
+    return lookupPricesLive(barcode, nameHint, skip);
+  }
   if (key === 'n:') return lookupPricesLive(barcode, nameHint);
   const hit = priceCache.get(key);
   if (hit && Date.now() - hit.at < PRICE_CACHE_HOURS * 3600000) { cacheHits++; return JSON.parse(JSON.stringify({ ww: hit.ww, coles: hit.coles, highest: hit.highest, cached: true })); }
@@ -353,14 +367,15 @@ async function lookupPrices(barcode, nameHint) {
   priceInFlight.set(key, p);
   return p;
 }
-async function lookupPricesLive(barcode, nameHint) {
-  // Woolworths and Coles are asked at the same time
+async function lookupPricesLive(barcode, nameHint, skip) {
+  const off = (k) => Promise.resolve({ found: false, off: true, label: STORES[k].label });
+  // Woolworths and Coles are asked at the same time (unless one is switched off for this file)
   let [ww, coles] = await Promise.all([
-    storeCall('ww', 'wwLookup', [barcode, nameHint || '']),
-    storeCall('coles', 'colesLookup', [barcode, nameHint || '']),
+    skip && skip.ww ? off('ww') : storeCall('ww', 'wwLookup', [barcode, nameHint || '']),
+    skip && skip.coles ? off('coles') : storeCall('coles', 'colesLookup', [barcode, nameHint || '']),
   ]);
   // Coles often can't find a barcode: try again with the Woolworths product name
-  if (!(coles && coles.found) && ww && ww.found && ww.name !== nameHint) coles = await storeCall('coles', 'colesLookup', ['', ww.name]);
+  if (!(skip && skip.coles) && !(coles && coles.found) && ww && ww.found && ww.name !== nameHint) coles = await storeCall('coles', 'colesLookup', ['', ww.name]);
   const highest = R.highestPrice(ww && ww.found ? ww.regular : null, coles && coles.found ? coles.regular : null);
   return { ww, coles, highest };
 }
@@ -697,6 +712,8 @@ function groupHeadHTML(f) {
     ' · <b>' + st.nw + '</b> new' + (st.made ? ' (' + st.made + ' created)' : '') + ' · <b>' + st.ps + '</b> in PosPort' + (st.flag ? ' · <span class="pill bad">' + st.flag + ' flagged</span>' : '') +
     (st.attn ? ' · <span class="pill warn">' + st.attn + ' to check</span>' : '') + '</span>' +
     '<span class="spacer"></span>' +
+    '<label class="fshop" title="Ask Woolworths for this file"><input type="checkbox" data-shop="ww"' + (f.noWW ? '' : ' checked') + '> Woolies</label>' +
+    '<label class="fshop" title="Ask Coles for this file"><input type="checkbox" data-shop="coles"' + (f.noColes ? '' : ' checked') + '> Coles</label>' +
     '<button class="btn small fx" data-act="create"' + (st.ready ? '' : ' disabled') + '>Create ' + st.ready + ' new</button>' +
     '<button class="btn small fx" data-act="tick"' + (st.flag ? '' : ' disabled') + '>Tick flagged</button>' +
     '<button class="btn small fx" data-act="save"' + (st.save ? '' : ' disabled') + '>Save ' + st.save + ' changes</button>' +
@@ -841,6 +858,19 @@ $('addTable').addEventListener('change', (e) => {
   saveState(); refreshRow(r);
 });
 $('addTable').addEventListener('click', (e) => {
+  const fshop = e.target.closest('.fshop');
+  if (fshop) {                      // Woolworths / Coles on or off for this one file
+    const box = fshop.querySelector('input');
+    if (e.target !== box) return;   // the label click is passed on to the box
+    const f = state.files.find((x) => x.id === box.closest('tr.fhead').dataset.f);
+    const k = box.dataset.shop;
+    f[k === 'ww' ? 'noWW' : 'noColes'] = !box.checked;
+    saveState();
+    const pend = state.add.filter((r) => (r.fileId || 'old') === f.id && (r.storePending || []).includes(k)).length;
+    log(f.name + ': ' + STORES[k].label + (box.checked ? ' on' + (pend ? ' – filling in ' + pend + ' items.' : '.') : ' off for this file (faster).'), 'ok');
+    if (box.checked) startLookup();
+    return;
+  }
   const head = e.target.closest('tr.fhead');
   if (head) { fileAction(head.dataset.f, e.target.closest('button[data-act]') ? e.target.closest('button[data-act]').dataset.act : 'toggle'); return; }
   const tr = e.target.closest('tr[data-i]');
@@ -1287,7 +1317,7 @@ async function startLookup(again) {
       };
       let r = (turn++ % 2 === 0 ? (fromOpen() || fromOthers()) : (fromOthers() || fromOpen())) || state.add.find(waiting);
       // nothing new to look up: fill in shops that were paused earlier (if they are answering again)
-      if (!r) r = state.add.find((x) => x.storePending && x.storePending.length && !x.looking && !caught.has(x) && x.storePending.some((k) => !storeCooling(k) && storeOn(k)));
+      if (!r) r = state.add.find((x) => x.storePending && x.storePending.length && !x.looking && !caught.has(x) && x.storePending.some((k) => shopUsable(x, k)));
       if (r) { if (!waiting(r)) { caught.add(r); r.catchUp = true; } tried.add(r); r.looking = true; r.relook = false; }
       return r;
     };
@@ -1331,11 +1361,15 @@ function changeBarcode(r, value) {
   replaceRow(r); saveState(); startLookup();
 }
 
+// Woolworths / Coles switched off for one file (tick boxes on the file's row)
+function fileOf(r) { return (state.files || []).find((f) => f.id === (r.fileId || 'old')) || {}; }
+function fileSkip(r) { const f = fileOf(r); return { ww: f.noWW === true, coles: f.noColes === true }; }
+const shopUsable = (r, k) => storeOn(k) && !storeCooling(k) && !fileSkip(r)[k];
 // A shop was paused when this row was looked up: ask that shop again now and update the prices.
 async function storeCatchUp(r) {
   const name = (r.ww && r.ww.found && r.ww.name) || (r.coles && r.coles.found && r.coles.name) || r.inName || r.hint || r.name || '';
   for (const k of (r.storePending || []).slice()) {
-    if (!storeOn(k) || storeCooling(k)) continue;           // still off / paused: stays pending
+    if (!shopUsable(r, k)) continue;                         // still off / paused: stays pending
     const fn = k === 'ww' ? 'wwLookup' : 'colesLookup';
     let x = await storeCall(k, fn, [r.barcode, name]);
     if (x && (x.paused || x.off)) continue;
@@ -1354,14 +1388,15 @@ async function storeCatchUp(r) {
 }
 
 async function lookupOne(r) {
-  let res = await lookupPrices(r.barcode, r.inName || r.hint);
+  const skip = fileSkip(r);
+  let res = await lookupPrices(r.barcode, r.inName || r.hint, skip);
   r.net = null;
   if (!res.highest || !(res.ww && res.ww.found) && !(res.coles && res.coles.found)) {
     // Not found by barcode: get the product name from open barcode databases, then try Woolworths/Coles by that name.
     const net = await window.CSB_STORES.internetLookup(r.barcode);
     if (net && net.found) {
       r.net = net;
-      const again = await lookupPrices('', [net.name, net.size].filter(Boolean).join(' '));
+      const again = await lookupPrices('', [net.name, net.size].filter(Boolean).join(' '), skip);
       if (again.highest) res = again;
     }
   }

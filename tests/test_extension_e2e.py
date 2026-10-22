@@ -333,6 +333,19 @@ def main():
         page.check("#useColes")
         wait_until(page, lambda: "$4.50" in r6(), 60000)
         print("coles off/on:", " ".join(r6().split())[:120])
+        # Coles off for ONE file only (tick box on the file's row): its new rows skip Coles, other files still ask
+        sh = page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first
+        sh.locator(".fshop input[data-shop=coles]").uncheck()
+        wait_until(page, lambda: "Coles off for this file" in page.inner_text("#log"))
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.fill("#addScan", "9300682055555"); page.press("#addScan", "Enter")
+        wait_until(page, lambda: "Done:" in page.inner_text("#log"), 60000)
+        r5 = lambda: page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682055555']")).first.inner_text()
+        assert "off" in r5() and "$4.20" in r5(), r5()
+        page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first.locator(".fshop input[data-shop=coles]").check()
+        wait_until(page, lambda: "$4.50" in r5(), 60000)
+        print("file switch:", " ".join(r5().split())[:100])
+
         # ignore Coles for just this row (wrong pack size): highest drops to the Woolworths price
         rw = page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682066666']")).first
         rw.locator(".shop-ign[data-k=coles]").click()
