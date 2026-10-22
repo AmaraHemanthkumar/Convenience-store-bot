@@ -247,6 +247,9 @@ const pendingFor = (k, rows) => (rows || state.add).filter((r) => (r.storePendin
     S[k === 'ww' ? 'useWW' : 'useColes'] = on;
     chrome.storage.local.set({ settings: S });
     paintShopButton(btn, on);
+    // the top button switches every file (each file's own button can then change just that file)
+    (state.files || []).forEach((f) => { f[k === 'ww' ? 'noWW' : 'noColes'] = !on; });
+    saveState();
     if (on) {
       const n = pendingFor(k);
       log(STORES[k].label + ' ON' + (n ? ' – filling in ' + n + ' items that skipped it…' : '.'), 'ok');
@@ -309,7 +312,6 @@ async function storeTab(kind) {
 async function storeCall(kind, fn, args) {
   const cfg = STORES[kind];
   for (let attempt = 0; attempt < 3; attempt++) {
-    if (!storeOn(kind)) return { found: false, off: true, label: cfg.label };
     if (storeCooling(kind)) return { found: false, paused: true, label: cfg.label, error: cfg.label + ' paused (check page)' };
     const tabId = await storeTab(kind);
     // first request after a pause: reload the shop's page in the background so its check can run
@@ -318,7 +320,6 @@ async function storeCall(kind, fn, args) {
       try { await storeReloading[kind]; } finally { setTimeout(() => { storeReloading[kind] = null; }, 20000); }
     } else if (storeReloading[kind]) await storeReloading[kind];
     await storeTurn(kind);
-    if (!storeOn(kind)) return { found: false, off: true, label: cfg.label };      // switched off while waiting
     const res = await exec(tabId, ['core/rules.js', 'core/stores.js'], async (f, argv) => {
       try { return await CSB_STORES[f].apply(null, argv); } catch (e) { return { found: false, error: String(e && e.message || e) }; }
     }, [fn, args]);
@@ -367,6 +368,7 @@ function applySkip(res, skip) {
   return out;
 }
 async function lookupPrices(barcode, nameHint, skip) {
+  if (skip === undefined) skip = { ww: !storeOn('ww'), coles: !storeOn('coles') };
   const key = priceKey(barcode, nameHint);
   if (skip && (skip.ww || skip.coles)) {
     // a remembered full answer can still be used; otherwise only ask the shops that are on
@@ -732,8 +734,8 @@ function groupHeadHTML(f) {
     ' · <b>' + st.nw + '</b> new' + (st.made ? ' (' + st.made + ' created)' : '') + ' · <b>' + st.ps + '</b> in PosPort' + (st.flag ? ' · <span class="pill bad">' + st.flag + ' flagged</span>' : '') +
     (st.attn ? ' · <span class="pill warn">' + st.attn + ' to check</span>' : '') + '</span>' +
     '<span class="spacer"></span>' +
-    '<button type="button" class="fshopbtn ' + (f.noWW ? 'off' : 'on') + '" data-shop="ww" title="Woolworths for this file – click to switch">Woolies ' + (f.noWW ? 'OFF' : 'ON') + '</button>' +
-    '<button type="button" class="fshopbtn ' + (f.noColes ? 'off' : 'on') + '" data-shop="coles" title="Coles for this file – click to switch">Coles ' + (f.noColes ? 'OFF' : 'ON') + '</button>' +
+    '<button type="button" class="fshopbtn ' + (fileShopOff(f, 'ww') ? 'off' : 'on') + '" data-shop="ww" title="Woolworths for this file – click to switch">Woolies ' + (fileShopOff(f, 'ww') ? 'OFF' : 'ON') + '</button>' +
+    '<button type="button" class="fshopbtn ' + (fileShopOff(f, 'coles') ? 'off' : 'on') + '" data-shop="coles" title="Coles for this file – click to switch">Coles ' + (fileShopOff(f, 'coles') ? 'OFF' : 'ON') + '</button>' +
     '<button class="btn small fx" data-act="create"' + (st.ready ? '' : ' disabled') + '>Create ' + st.ready + ' new</button>' +
     '<button class="btn small fx" data-act="tick"' + (st.flag ? '' : ' disabled') + '>Tick flagged</button>' +
     '<button class="btn small fx" data-act="save"' + (st.save ? '' : ' disabled') + '>Save ' + st.save + ' changes</button>' +
@@ -883,13 +885,13 @@ $('addTable').addEventListener('click', (e) => {
     const head = fbtn.closest('tr.fhead');
     const f = state.files.find((x) => x.id === head.dataset.f);
     const k = fbtn.dataset.shop, key = k === 'ww' ? 'noWW' : 'noColes';
-    f[key] = !f[key];
+    f[key] = !fileShopOff(f, k);
     head.outerHTML = groupHeadHTML(f);
     saveState();
     const rows = state.add.filter((r) => (r.fileId || 'old') === f.id);
     if (!f[key]) {
       const n = pendingFor(k, rows);
-      log(f.name + ': ' + STORES[k].label + ' ON' + (n ? ' – filling in ' + n + ' items…' : '.') + (!storeOn(k) ? ' (it is OFF at the top – switch it on there too)' : ''), 'ok');
+      log(f.name + ': ' + STORES[k].label + ' ON' + (n ? ' – filling in ' + n + ' items…' : '.'), 'ok');
       if (n) startLookup();
     } else log(f.name + ': ' + STORES[k].label + ' OFF for this file (faster).', 'ok');
     refreshSummary();
@@ -1390,8 +1392,9 @@ function changeBarcode(r, value) {
 
 // Woolworths / Coles switched off for one file (tick boxes on the file's row)
 function fileOf(r) { return (state.files || []).find((f) => f.id === (r.fileId || 'old')) || {}; }
-function fileSkip(r) { const f = fileOf(r); return { ww: f.noWW === true, coles: f.noColes === true }; }
-const shopUsable = (r, k) => storeOn(k) && !storeCooling(k) && !fileSkip(r)[k];
+function fileShopOff(f, k) { const v = f[k === 'ww' ? 'noWW' : 'noColes']; return v === undefined ? !storeOn(k) : v === true; }
+function fileSkip(r) { const f = fileOf(r); return { ww: fileShopOff(f, 'ww'), coles: fileShopOff(f, 'coles') }; }
+const shopUsable = (r, k) => !storeCooling(k) && !fileSkip(r)[k];
 // A shop was paused when this row was looked up: ask that shop again now and update the prices.
 async function storeCatchUp(r) {
   const name = (r.ww && r.ww.found && r.ww.name) || (r.coles && r.coles.found && r.coles.name) || r.inName || r.hint || r.name || '';

@@ -348,6 +348,14 @@ def main():
         page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first.locator(".fshopbtn[data-shop=coles]").click()
         wait_until(page, lambda: "$4.50" in r5(), 60000)
         print("file switch:", " ".join(r5().split())[:100])
+        # your case: top button OFF, but this file switched ON -> the file's button wins, its rows are filled in
+        page.click("#useColes"); assert page.inner_text("#useColes").strip() == "Coles OFF"
+        page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first.locator(".fshopbtn[data-shop=coles]").click()
+        assert "Coles ON" in page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first.inner_text()
+        page.fill("#addScan", "9300682044444"); page.press("#addScan", "Enter")
+        r4 = lambda: page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682044444']")).first.inner_text()
+        wait_until(page, lambda: "$4.50" in r4(), 60000)
+        page.click("#useColes"); assert page.inner_text("#useColes").strip() == "Coles ON"
 
         # ignore Coles for just this row (wrong pack size): highest drops to the Woolworths price
         rw = page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682066666']")).first
