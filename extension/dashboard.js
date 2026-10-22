@@ -1911,6 +1911,33 @@ $('chkScan').addEventListener('click', () => scanCatalogue());
 function scanCatalogue(insideJob) {
   return insideJob ? scanCatalogueNow() : posJob('reading the PosPort item list', scanCatalogueNow);
 }
+// Go to the next page of PosPort's Items list and wait (from this tab) until the rows change.
+// Tries a plain click, then the full click, then brings the PosPort tab to the front for a moment.
+async function turnPage(page) {
+  const before = await pos('listSignature');
+  const changed = async (ms) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      await sleep(400);
+      const now = await pos('listSignature');
+      if (now && before && now.sig !== before.sig && now.sig !== '[]') return true;
+    }
+    return false;
+  };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt === 2) {               // still stuck: show the PosPort tab so the browser lets it load
+      const tabId = await posTab();
+      log('PosPort is slow to show page ' + (page + 1) + ' – showing its tab for a moment.');
+      await chrome.tabs.update(tabId, { active: true });
+      await sleep(1500);
+    }
+    const c = await pos('clickNext', attempt === 1);
+    if (!c || !c.ok) return { ok: false, last: true };
+    if (await changed(attempt === 0 ? 10000 : 8000)) { await sleep(S.delayMs > 300 ? 300 : S.delayMs); return { ok: true }; }
+  }
+  return { ok: false, slow: true };
+}
+
 async function scanCatalogueNow() {
   {
     if (!(await posGo('/catalog/items', 'items'))) { log('Items page did not open.', 'err'); return; }
@@ -1929,10 +1956,8 @@ async function scanCatalogueNow() {
       pagesRead = page;
       $('chkScanInfo').textContent = 'Page ' + page + ' · ' + seen.size + ' items';
       $('addScanInfo').textContent = 'Reading your PosPort list… page ' + page + ' · ' + seen.size + ' items';
-      let nx = await pos('nextPage', S.delayMs);
-      // a slow page is tried again (up to 3 times) instead of being taken as the end of the list
-      for (let t = 0; t < 3 && nx && nx.slow; t++) { await sleep(2000); nx = await pos('nextPage', S.delayMs + 1000); }
-      if (!nx || !nx.ok) { stoppedEarly = !!(nx && nx.slow) || (lastPage && page < lastPage); break; }
+      const nx = await turnPage(page);
+      if (!nx.ok) { stoppedEarly = !!nx.slow || (lastPage && page < lastPage); break; }
     }
     await sleep(1500);                                       // let the last page's item data arrive
     const shown = await pos('listTotal');

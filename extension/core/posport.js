@@ -418,6 +418,18 @@
     return { ok: !!changed, last: false, slow: !changed };
   }
 
+  // Click Next and return straight away; the bot waits from its own (foreground) tab, because a
+  // PosPort tab in the background is slowed down by the browser and its own timers run late
+  function listSignature() { return { ok: true, sig: JSON.stringify(listRows().map((r) => r.name)) }; }
+  function clickNext(hard) {
+    const next = document.querySelector('[data-testid="next-button"]') ||
+      Array.from(document.querySelectorAll('button,a,li,[role="button"]')).filter(visible).find((b) => /next/i.test(b.getAttribute('aria-label') || '') || /^(›|>|»|next)$/i.test(norm(b.textContent)));
+    if (!next) return { ok: false, last: true };
+    if (next.disabled || next.getAttribute('aria-disabled') === 'true' || next.getAttribute('data-disabled') === 'true') return { ok: false, last: true };
+    if (hard) realClick(next); else next.click();
+    return { ok: true };
+  }
+
   // Clear any search left in the Items search box (a leftover search shows only part of the list)
   async function clearListSearch(delay) {
     const s = listSearchInput();
@@ -576,7 +588,7 @@
 
   root.CSB_POSPORT = {
     SEL, applyOverrides, pageInfo, bulkStatus, ensureRows, fillBulkRow, bulkGetCategories, clickCreate, cancelBulk,
-    readListRows, searchList, tickRow, clickPrintLabels, nextPage, clearListSearch, setRowsPerPage, listTotal, openItem, readEditPrice, setEditPrice, setEditFields,
+    readListRows, searchList, tickRow, clickPrintLabels, nextPage, clickNext, listSignature, clearListSearch, setRowsPerPage, listTotal, openItem, readEditPrice, setEditPrice, setEditFields,
     captured, clearCaptured, toasts, menuLinks, readTable,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
