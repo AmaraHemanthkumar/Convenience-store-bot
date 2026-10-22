@@ -222,3 +222,9 @@ tr.locked input, tr.locked select, tr.locked button { pointer-events: none; }
 .shop-ign { font-size: 11px; padding: 0 6px; margin-top: 3px; border: 1px solid #ddd; border-radius: 9px; background: #fff; cursor: pointer; color: #666; }
 .shop-ign:hover { border-color: var(--bad, #c8102e); color: var(--bad, #c8102e); }
 .fshop { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; margin-right: 6px; cursor: pointer; white-space: nowrap; }
+
+.shopbtn, .fshopbtn { border-radius: 14px; border: 1px solid; cursor: pointer; font-weight: 600; }
+.shopbtn { padding: 4px 12px; font-size: 13px; }
+.fshopbtn { padding: 2px 9px; font-size: 12px; margin-right: 5px; white-space: nowrap; }
+.shopbtn.on, .fshopbtn.on { background: #e6f4ec; border-color: #1f8a4c; color: #1f6b3c; }
+.shopbtn.off, .fshopbtn.off { background: #f1f1f1; border-color: #bbb; color: #888; text-decoration: line-through; }

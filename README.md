@@ -76,7 +76,7 @@ Load that Excel again (*Choose Excel files*) to carry on exactly where you were,
 - If the save is younger than 24 hours (Settings), its Woolworths and Coles prices are used as they are, with no new look-ups.
 - If it's older, prices are looked up again, but your typed names, prices and ticks are kept.
 
-**Woolworths / Coles on or off:** the tick boxes at the top (*Ask: Woolworths · Coles*) switch a shop off immediately, even mid-run. That's faster, and the shop's column shows *off*. Tick it again later and the bot fills in what it skipped.
+**Woolworths / Coles on or off:** the **Woolworths ON / Coles ON** buttons at the top switch a shop off (grey) or on (green) immediately, even mid-run. Each file row has its own **Woolies / Coles** buttons for that file only. Switching a shop back on fills in the rows that skipped it straight away, and the summary shows *filling in Woolworths/Coles: N left*. That's faster, and the shop's column shows *off*. Tick it again later and the bot fills in what it skipped.
 
 **Keep working while PosPort updates:** *Create*, *Save changes*, *Re-check PosPort* and label ticking are PosPort jobs that take turns in the background. A blue bar shows what is running and what is waiting, with *Stop after this item*. Only the rows being sent are greyed out. You can edit other files, load the next batch and look things up meanwhile.
 

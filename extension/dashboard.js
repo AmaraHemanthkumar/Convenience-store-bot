@@ -224,15 +224,35 @@ const storeTabOpening = {}, storeBlocked = {};
 const storeCool = {}, storeStrikes = {}, storeReloading = {};
 // Woolworths / Coles can be switched off at the top of the bot (takes effect on the very next request)
 const storeOn = (kind) => (kind === 'ww' ? S.useWW : S.useColes) !== false;
+// "3 file(s) · 120/130 looked up · filling in Woolworths/Coles: 40 left"
+function refreshSummary() {
+  if (!state.add.length) { $('addSummary').textContent = ''; return; }
+  const done = state.add.filter((x) => x.status !== 'waiting').length;
+  const fill = state.add.filter((r) => (r.storePending || []).some((k) => shopUsable(r, k))).length;
+  $('addSummary').textContent = state.files.length + ' file(s) · ' + done + '/' + state.add.length + ' looked up' +
+    (fill ? ' · filling in Woolworths/Coles: ' + fill + ' left' : '') + (lookupRunning ? ' – working in the background…' : '');
+}
+// On / off buttons (top of the bot = every file; on a file's row = that file only)
+function paintShopButton(btn, on) {
+  btn.classList.toggle('on', on); btn.classList.toggle('off', !on);
+  btn.textContent = btn.dataset.label + (on ? ' ON' : ' OFF');
+  btn.title = on ? 'Asking ' + btn.dataset.label + ' – click to skip it (faster)' : btn.dataset.label + ' is skipped – click to ask it again and fill in what was skipped';
+}
+const pendingFor = (k, rows) => (rows || state.add).filter((r) => (r.storePending || []).includes(k) && shopUsable(r, k)).length;
 ['ww', 'coles'].forEach((k) => {
-  const box = $(k === 'ww' ? 'useWW' : 'useColes');
-  box.addEventListener('change', () => {
-    S[k === 'ww' ? 'useWW' : 'useColes'] = box.checked;
+  const btn = $(k === 'ww' ? 'useWW' : 'useColes');
+  btn.dataset.label = STORES[k].label;
+  btn.addEventListener('click', () => {
+    const on = !storeOn(k);
+    S[k === 'ww' ? 'useWW' : 'useColes'] = on;
     chrome.storage.local.set({ settings: S });
-    const pending = state.add.filter((r) => (r.storePending || []).includes(k)).length;
-    log(STORES[k].label + (box.checked ? ' switched on' + (pending ? ' – filling in ' + pending + ' items it skipped.' : '.') : ' switched off – the bot skips it (faster). Tick it again any time to fill in its prices.'), 'ok');
-    if (box.checked) startLookup();
-    safeRenderAdd();
+    paintShopButton(btn, on);
+    if (on) {
+      const n = pendingFor(k);
+      log(STORES[k].label + ' ON' + (n ? ' – filling in ' + n + ' items that skipped it…' : '.'), 'ok');
+      if (n) startLookup();
+    } else log(STORES[k].label + ' OFF – skipped from now on (faster). Click it again to fill in its prices.', 'ok');
+    safeRenderAdd(); refreshSummary();
   });
 });
 const storeCooling = (kind) => (storeCool[kind] || 0) > Date.now();
@@ -712,8 +732,8 @@ function groupHeadHTML(f) {
     ' · <b>' + st.nw + '</b> new' + (st.made ? ' (' + st.made + ' created)' : '') + ' · <b>' + st.ps + '</b> in PosPort' + (st.flag ? ' · <span class="pill bad">' + st.flag + ' flagged</span>' : '') +
     (st.attn ? ' · <span class="pill warn">' + st.attn + ' to check</span>' : '') + '</span>' +
     '<span class="spacer"></span>' +
-    '<label class="fshop" title="Ask Woolworths for this file"><input type="checkbox" data-shop="ww"' + (f.noWW ? '' : ' checked') + '> Woolies</label>' +
-    '<label class="fshop" title="Ask Coles for this file"><input type="checkbox" data-shop="coles"' + (f.noColes ? '' : ' checked') + '> Coles</label>' +
+    '<button type="button" class="fshopbtn ' + (f.noWW ? 'off' : 'on') + '" data-shop="ww" title="Woolworths for this file – click to switch">Woolies ' + (f.noWW ? 'OFF' : 'ON') + '</button>' +
+    '<button type="button" class="fshopbtn ' + (f.noColes ? 'off' : 'on') + '" data-shop="coles" title="Coles for this file – click to switch">Coles ' + (f.noColes ? 'OFF' : 'ON') + '</button>' +
     '<button class="btn small fx" data-act="create"' + (st.ready ? '' : ' disabled') + '>Create ' + st.ready + ' new</button>' +
     '<button class="btn small fx" data-act="tick"' + (st.flag ? '' : ' disabled') + '>Tick flagged</button>' +
     '<button class="btn small fx" data-act="save"' + (st.save ? '' : ' disabled') + '>Save ' + st.save + ' changes</button>' +
@@ -748,7 +768,7 @@ function renderAdd() {
   });
   t.innerHTML = html;
   const done = state.add.filter((r) => r.status !== 'waiting').length;
-  $('addSummary').textContent = state.files.length + ' file(s) · ' + done + '/' + state.add.length + ' looked up' + (lookupRunning ? ' – looking up in the background…' : '');
+  refreshSummary();
   refreshButtons();
 }
 
@@ -798,7 +818,7 @@ function refreshRow(r) {
   if (!body) { pendingFull = true; scheduleFlush(); }
   else if (f && f.open) { if (userActive()) { pendingRows.add(r); scheduleFlush(); } else replaceRow(r); }
   const done = state.add.filter((x) => x.status !== 'waiting').length;
-  $('addSummary').textContent = state.files.length + ' file(s) · ' + done + '/' + state.add.length + ' looked up' + (lookupRunning ? ' – looking up in the background…' : '');
+  refreshSummary();
   ['fAll', 'fNew', 'fPos', 'fAttn'].forEach((id, k) => { $(id).textContent = [state.add.length, state.add.filter((x) => !x.pos).length, state.add.filter((x) => x.pos).length, state.add.filter(needsAttention).length][k]; });
   refreshButtons();
 }
@@ -858,17 +878,21 @@ $('addTable').addEventListener('change', (e) => {
   saveState(); refreshRow(r);
 });
 $('addTable').addEventListener('click', (e) => {
-  const fshop = e.target.closest('.fshop');
-  if (fshop) {                      // Woolworths / Coles on or off for this one file
-    const box = fshop.querySelector('input');
-    if (e.target !== box) return;   // the label click is passed on to the box
-    const f = state.files.find((x) => x.id === box.closest('tr.fhead').dataset.f);
-    const k = box.dataset.shop;
-    f[k === 'ww' ? 'noWW' : 'noColes'] = !box.checked;
+  const fbtn = e.target.closest('.fshopbtn');
+  if (fbtn) {                       // Woolworths / Coles on or off for this one file
+    const head = fbtn.closest('tr.fhead');
+    const f = state.files.find((x) => x.id === head.dataset.f);
+    const k = fbtn.dataset.shop, key = k === 'ww' ? 'noWW' : 'noColes';
+    f[key] = !f[key];
+    head.outerHTML = groupHeadHTML(f);
     saveState();
-    const pend = state.add.filter((r) => (r.fileId || 'old') === f.id && (r.storePending || []).includes(k)).length;
-    log(f.name + ': ' + STORES[k].label + (box.checked ? ' on' + (pend ? ' – filling in ' + pend + ' items.' : '.') : ' off for this file (faster).'), 'ok');
-    if (box.checked) startLookup();
+    const rows = state.add.filter((r) => (r.fileId || 'old') === f.id);
+    if (!f[key]) {
+      const n = pendingFor(k, rows);
+      log(f.name + ': ' + STORES[k].label + ' ON' + (n ? ' – filling in ' + n + ' items…' : '.') + (!storeOn(k) ? ' (it is OFF at the top – switch it on there too)' : ''), 'ok');
+      if (n) startLookup();
+    } else log(f.name + ': ' + STORES[k].label + ' OFF for this file (faster).', 'ok');
+    refreshSummary();
     return;
   }
   const head = e.target.closest('tr.fhead');
@@ -1166,8 +1190,9 @@ function findInPos(r) {
     if (mm.item && mm.sure && !byBarcode) return { item: mm.item, how: 'name' };
     if (mm.item && (mm.sure || mm.score >= 0.5) && (!best || mm.score > best.score)) best = mm;
   }
-  const why = r.barcode
+  const why = r.barcode && st.real
     ? 'barcode ' + r.barcode + ' is not on any of your ' + st.real + ' PosPort items with a barcode' + (best ? '' : ', and no PosPort name is close')
+    : r.barcode ? 'the bot has no PosPort barcodes yet (press ↻ Re-check PosPort) and no PosPort name is close enough'
     : 'no barcode, and no PosPort name is close enough';
   return { item: null, why, maybe: best ? Object.assign({ score: best.score }, best.item) : null };
 }
@@ -1327,6 +1352,8 @@ async function startLookup(again) {
       r.looking = false;
       refreshRow(r); saveState();
     });
+    const filled = caught.size;
+    if (filled) log('Filled in Woolworths/Coles for ' + filled + ' items.', 'ok');
     if (n) {
       const nPos = state.add.filter((r) => r.pos).length, nNew = state.add.length - nPos;
       const secs = Math.max(1, (Date.now() - startedAt) / 1000);
@@ -3167,7 +3194,7 @@ function fillSettings() {
   $('addMarkup').value = Number(S.markup).toFixed(2);
   $('addMarkupPct').value = S.markupPct || 0;
   $('addBasis').value = S.priceBasis || 'shops';
-  $('useWW').checked = S.useWW !== false; $('useColes').checked = S.useColes !== false;
+  paintShopButton($('useWW'), S.useWW !== false); paintShopButton($('useColes'), S.useColes !== false);
   $('s_matchBy').value = S.matchBy || 'barcode';
   $('addInvMargin').value = S.fallbackMargin || 40;
   R.setAbbreviations(S.abbrevs || '');
@@ -3246,5 +3273,7 @@ function refreshButtons() {
   // carry on with items that were still waiting when the bot was closed or reloaded
   state.add.forEach((r) => { r.locked = false; });     // a PosPort job that was cut off by closing the bot
   const left = state.add.filter((r) => r.status === 'waiting' || r.looking).length;
+  const fillLeft = state.add.filter((r) => (r.storePending || []).some((k) => shopUsable(r, k))).length;
+  if (!left && fillLeft) { log('Carrying on: filling in Woolworths/Coles for ' + fillLeft + ' items.'); startLookup(); }
   if (left) { state.add.forEach((r) => { if (r.looking) { r.looking = false; r.status = 'waiting'; } }); log('Carrying on: ' + left + ' items still to look up.'); startLookup(); }
 })();

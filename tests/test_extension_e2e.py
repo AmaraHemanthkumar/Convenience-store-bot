@@ -324,25 +324,28 @@ def main():
         print("coles filled in later:", " ".join(row.inner_text().split())[:140])
 
         # Coles switched off at the top: skipped at once ("off"), filled in when switched back on
-        page.uncheck("#useColes")
+        page.click("#useColes")
+        assert page.inner_text("#useColes").strip() == "Coles OFF"
         page.evaluate("document.getElementById('log').textContent = ''")
         page.fill("#addScan", "9300682066666"); page.press("#addScan", "Enter")
         wait_until(page, lambda: "Done:" in page.inner_text("#log"), 60000)
         r6 = lambda: page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682066666']")).first.inner_text()
         assert "off" in r6() and "$4.20" in r6(), r6()
-        page.check("#useColes")
+        page.click("#useColes")
+        assert page.inner_text("#useColes").strip() == "Coles ON"
+        wait_until(page, lambda: "filling in" in page.inner_text("#log") or "$4.50" in r6(), 20000)
         wait_until(page, lambda: "$4.50" in r6(), 60000)
         print("coles off/on:", " ".join(r6().split())[:120])
         # Coles off for ONE file only (tick box on the file's row): its new rows skip Coles, other files still ask
         sh = page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first
-        sh.locator(".fshop input[data-shop=coles]").uncheck()
-        wait_until(page, lambda: "Coles off for this file" in page.inner_text("#log"))
+        sh.locator(".fshopbtn[data-shop=coles]").click()
+        wait_until(page, lambda: "Coles OFF for this file" in page.inner_text("#log"))
         page.evaluate("document.getElementById('log').textContent = ''")
         page.fill("#addScan", "9300682055555"); page.press("#addScan", "Enter")
         wait_until(page, lambda: "Done:" in page.inner_text("#log"), 60000)
         r5 = lambda: page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682055555']")).first.inner_text()
         wait_until(page, lambda: "off" in r5() and "$4.20" in r5(), 60000)
-        page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first.locator(".fshop input[data-shop=coles]").check()
+        page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first.locator(".fshopbtn[data-shop=coles]").click()
         wait_until(page, lambda: "$4.50" in r5(), 60000)
         print("file switch:", " ".join(r5().split())[:100])
 
