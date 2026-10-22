@@ -619,8 +619,9 @@ function addStatusPill(r) {
   if (r.status === 'created' && r.dupNote) return '<span class="pill bad">created – duplicate?</span><span class="sub why-new">' + esc(r.dupNote) + '</span>';
   const map = { waiting: 'idle', ready: 'ok', check: 'warn', 'not found': 'bad', created: 'ok', filled: 'warn', error: 'bad', skipped: 'idle' };
   return '<span class="pill ' + (map[r.status] || 'idle') + '" title="' + esc(r.note || '') + '">' + esc(r.status === 'ready' ? 'new – ready' : r.status) + '</span>' +
-    (r.whyNew && r.status !== 'created' && r.status !== 'waiting' ? '<span class="sub why-new">why new: ' + esc(r.whyNew) + '</span>' : '');
+    (r.whyNew && r.status !== 'created' && r.status !== 'waiting' ? '<span class="sub why-new">why new: ' + esc(r.whyNew) + '</span>' : '') + alsoInHTML(r);
 }
+const alsoInHTML = (r) => (r.alsoIn ? '<span class="sub also-in" title="' + esc(r.alsoIn.join('\n')) + '">also on ' + r.alsoIn.length + ' other file' + (r.alsoIn.length > 1 ? 's' : '') + ' – created once</span>' : '');
 
 const needsAttention = (r) => ['not found', 'error', 'check', 'filled'].includes(r.status) || !!r.maybe || r.updated === false ||
   (r.pos && r.chk && r.chk.flagged && r.updated !== true);
@@ -720,6 +721,7 @@ function fileStats(fid) {
     attn: rows.filter(needsAttention).length, made: rows.filter((r) => r.status === 'created').length,
     ready: rows.filter((r) => !r.pos && r.use !== false && (r.status === 'ready' || r.status === 'check')).length,
     save: rows.filter((r) => r.pos && r.apply && (r.newPrice > 0 || (r.newName && r.newName !== r.pos.name))).length,
+    shared: rows.filter((r) => r.alsoIn && r.alsoIn.length).length,
   };
 }
 
@@ -732,7 +734,9 @@ function groupHeadHTML(f) {
     '<span class="fmeta">' + st.n + ' items' + (f.repeats && f.repeats.length ? ' <span class="muted" title="Same barcode more than once in the sheet: ' + esc(Array.from(new Set(f.repeats)).join(', ')) + '">(+' + f.repeats.length + ' repeat' + (f.repeats.length > 1 ? 's' : '') + ')</span>' : '') + ' · ' + (st.done < st.n ? '<span class="fbar"><i style="width:' + pct + '%"></i></span> looking up ' + st.done + '/' + st.n :
       '<span class="pill ok">looked up</span>') +
     ' · <b>' + st.nw + '</b> new' + (st.made ? ' (' + st.made + ' created)' : '') + ' · <b>' + st.ps + '</b> in PosPort' + (st.flag ? ' · <span class="pill bad">' + st.flag + ' flagged</span>' : '') +
-    (st.attn ? ' · <span class="pill warn">' + st.attn + ' to check</span>' : '') + '</span>' +
+    (st.attn ? ' · <span class="pill warn">' + st.attn + ' to check</span>' : '') +
+    (st.shared ? ' · <span class="pill" title="These products are also on another loaded file – they are created only once">' + st.shared + ' also on other files</span>' : '') +
+    (f.meta && f.meta.source && f.meta.source !== 'computer' ? '<br><span class="fsrc muted">' + esc(sourceLine(f.meta)) + '</span>' : '') + '</span>' +
     '<span class="spacer"></span>' +
     '<button type="button" class="fshopbtn ' + (fileShopOff(f, 'ww') ? 'off' : 'on') + '" data-shop="ww" title="Woolworths for this file – click to switch">Woolies ' + (fileShopOff(f, 'ww') ? 'OFF' : 'ON') + '</button>' +
     '<button type="button" class="fshopbtn ' + (fileShopOff(f, 'coles') ? 'off' : 'on') + '" data-shop="coles" title="Coles for this file – click to switch">Coles ' + (fileShopOff(f, 'coles') ? 'OFF' : 'ON') + '</button>' +
@@ -755,13 +759,52 @@ function ensureFiles() {
   state.files = state.files.filter((f) => ids.has(f.id));
 }
 
+// The same product on more than one loaded file: each row knows the other files, and it is created only once.
+function mergeAcrossFiles() {
+  const names = new Map((state.files || []).map((x) => [x.id, x.name]));
+  const by = new Map();
+  state.add.forEach((r) => {
+    const k = r.barcode ? 'b:' + bcKey(R.unitBarcode(r.barcode) || r.barcode) : (r.hint || r.inName) ? 'n:' + nameKey(r.hint || r.inName) : '';
+    r.mergeKey = k;
+    if (!k) return;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(r);
+  });
+  state.add.forEach((r) => {
+    const g = r.mergeKey ? by.get(r.mergeKey) : null;
+    const other = g ? [...new Set(g.filter((x) => (x.fileId || 'old') !== (r.fileId || 'old')).map((x) => names.get(x.fileId || 'old') || ''))].filter(Boolean) : [];
+    r.alsoIn = other.length ? other : null;
+  });
+}
+
+function oneListHTML() {
+  if (!state.catalogue.length) return '<tbody><tr><td class="muted">Press ↻ Re-check PosPort first, so the bot knows your Back Office items.</td></tr></tbody>';
+  const { rows, count, order, files } = buildCombined();
+  const cls = (st) => (st.startsWith('🆕') ? 'ok' : st.startsWith('⚠') ? 'warn' : 'idle');
+  let html = '<thead><tr><th colspan="7">' + rows.length + ' products from ' + files.length + ' files · ' +
+    Object.keys(count).sort((a, b) => order(a) - order(b)).map((k) => count[k] + ' ' + esc(k)).join(' · ') +
+    ' <button id="oneListXlsx" class="btn small">Save this list to Excel</button></th></tr>' +
+    '<tr><th>Status</th><th>Barcode</th><th>Invoice / sheet name</th><th>Back Office</th><th>Shops / cost</th><th>Files</th><th>Note</th></tr></thead><tbody>';
+  rows.forEach((x) => {
+    html += '<tr><td><span class="pill ' + cls(x.Status) + '">' + esc(x.Status) + '</span></td><td>' + esc(x.Barcode) + '</td><td>' + esc(x['Invoice / sheet name']) +
+      (x['Shop product'] && x['Shop product'] !== x['Invoice / sheet name'] ? '<span class="sub">' + esc(x['Shop product']) + '</span>' : '') + '</td>' +
+      '<td>' + esc(x['Back Office name']) + (x['Back Office price'] !== '' ? '<span class="sub">' + m(x['Back Office price']) + '</span>' : '') + '</td>' +
+      '<td>' + (x['Shop normal price'] ? m(x['Shop normal price']) : '') + (x['Unit cost'] ? '<span class="sub">cost ' + m(x['Unit cost']) + (x['Cost changed'] ? ' (' + esc(x['Cost changed']) + ')' : '') + '</span>' : '') + '</td>' +
+      '<td class="small-note">' + esc(x.Files) + '</td><td class="small-note">' + esc([x['Price note'], x['Similar Back Office item'] ? 'similar: ' + x['Similar Back Office item'] : ''].filter(Boolean).join(' · ')) + '</td></tr>';
+  });
+  return html + '</tbody>';
+}
+
 function renderAdd() {
   ensureFiles();
+  mergeAcrossFiles();
   const t = $('addTable');
   const counts = { all: state.add.length, new: state.add.filter((r) => !r.pos).length, pos: state.add.filter((r) => r.pos).length, attn: state.add.filter(needsAttention).length };
   $('fAll').textContent = counts.all; $('fNew').textContent = counts.new; $('fPos').textContent = counts.pos; $('fAttn').textContent = counts.attn;
   document.querySelectorAll('#addFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === (state.addFilter || 'all')));
   if (!state.add.length) { t.innerHTML = '<tbody><tr><td class="muted">Choose one or more Excel files, or scan barcodes. Each file appears here as its own row – click it to open the whole sheet.</td></tr></tbody>'; $('addSummary').textContent = ''; refreshButtons(); return; }
+  $('fOne').textContent = new Set(state.add.map((r) => r.mergeKey).filter(Boolean)).size;
+  if ((state.addFilter || 'all') === 'one') { t.innerHTML = oneListHTML(); refreshSummary(); refreshButtons(); return; }
   let html = '<thead><tr><th><input type="checkbox" id="addAll" title="Tick / untick everything shown"></th><th>Barcode</th><th>Woolworths</th><th>Coles</th><th>Invoice <span class="muted">(cost each)</span></th><th class="num">Highest</th><th class="num">Price</th><th>Name</th><th>Category / check</th><th>Status</th></tr></thead>';
   state.files.forEach((f) => {
     html += '<tbody class="fgroup" data-f="' + esc(f.id) + '">' + groupHeadHTML(f);
@@ -972,55 +1015,89 @@ $('addFile').addEventListener('change', async (e) => {
   const files = Array.from(e.target.files || []);
   e.target.value = '';
   if (!files.length) return;
+  await loadFiles(files.map((f) => ({ file: f, meta: { source: 'computer', fetchedAt: Date.now() } })));
+});
+
+// Load files into Items & prices. Each entry: { file, meta } – meta says where it came from
+// (your computer, Gmail: sender / subject / email time / account, a photo, a Woolworths/Coles account) and when.
+async function loadFiles(entries) {
   ensureFiles();
   const anyOpen = state.files.some((f) => f.open);
-  let first = true;
-  for (const f of files) {
-    const saved = await readSaved(f);
-    if (saved) { restoreSaved(saved, f.name); first = false; continue; }
-    const seen = new Set();      // a repeat is only skipped inside the same file – every file shows all its items
-    // the same file loaded again replaces its old row (items already created / saved are kept as they are)
-    const again = state.files.find((x) => x.name === f.name && !x.invoice);
-    if (again) {
-      const keep = (r) => r.status === 'created' || r.updated === true;
-      const before = state.add.length;
-      state.add = state.add.filter((r) => (r.fileId || 'old') !== again.id || keep(r));
-      if (!state.add.some((r) => (r.fileId || 'old') === again.id)) state.files = state.files.filter((x) => x !== again);
-      log(f.name + ' loaded again – replaced the old copy (' + (before - state.add.length) + ' rows).');
+  let first = true, loaded = 0;
+  for (const { file: f, meta } of entries) {
+    const before = (state.files || []).length;
+    const ok = await loadOneFile(f, meta || {}, !anyOpen && first);
+    if (ok) {
+      first = false; loaded++;
+      const made = state.files.length > before ? state.files[state.files.length - 1] : null;
+      if (typeof recordLoaded === 'function') recordLoaded(meta || {}, f.name, made ? made.name : 'restored saved work');
     }
-    const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    if (/\.pdf$/i.test(f.name)) {
-      let inv;
-      try { inv = await readInvoicePdf(f); } catch (err) { log(f.name + ': ' + err.message, 'err'); continue; }
-      const rows = [];
-      inv.items.forEach((it) => {
-        const key = it.barcode || it.desc.toLowerCase();
-        if (seen.has(key)) return;
-        seen.add(key);
-        const r = { barcode: it.barcode, inName: '', hint: it.name || it.desc, name: '', tname: '', category: '', price: null, status: 'waiting', use: it.shipped > 0, fileId: id,
-          note: it.status ? it.status + ' – not delivered' : '' };
-        setNames(r, it.name || INV.tidyName(it.desc), '');
-        r.nameFromInvoice = true;
-        rows.push(r);
-      });
-      state.files.push({ id, name: (inv.supplier || 'Invoice').replace(/ Pty Ltd/i, '') + ' #' + (inv.number || f.name) + (inv.date ? ' · ' + inv.date : ''), open: !anyOpen && first, invoice: inv.id });
-      state.add.push(...rows);
-      log('Loaded ' + rows.length + ' items from invoice ' + (inv.number || f.name));
-      first = false;
-      continue;
-    }
-    const raw = await readSheet(f);
-    const res = itemsFromSheet(raw, null, id, seen);
-    if (!res.items.length) { log(f.name + ': no barcodes or names found – use "Columns…" after loading to pick them.', 'err'); }
-    state.files.push({ id, name: f.name, open: !anyOpen && first, raw: raw.slice(0, 5000), picks: res.picks, repeats: res.repeats });
-    state.add.push(...res.items);
-    if (!res.items.length) state.add.push({ barcode: '', inName: '(no rows read)', hint: '', name: '', tname: '', status: 'not found', use: false, fileId: id, note: 'Click "Columns…" on this file' });
-    log('Loaded ' + res.items.length + ' items from ' + f.name + (res.repeats.length ? ' (' + res.repeats.length + ' rows were the same barcode again: ' + Array.from(new Set(res.repeats)).join(', ') + ' – shown once, marked ×2)' : ''));
-    first = false;
   }
-  renderAdd(); saveState();
-  startLookup();
-});
+  renderAdd(); saveState(); renderInvoices();
+  if (loaded) { mergeAcrossFiles(); startLookup(); }
+  return loaded;
+}
+
+const isImage = (name) => /\.(jpe?g|png|webp|bmp|gif|heic)$/i.test(name);
+async function loadOneFile(f, meta, open) {
+  const saved = /\.xlsx?$/i.test(f.name) ? await readSaved(f) : null;
+  if (saved) { restoreSaved(saved, f.name); return true; }
+  const seen = new Set();      // a repeat is only skipped inside the same file – every file shows all its items
+  // the same file loaded again replaces its old row (items already created / saved are kept as they are)
+  const again = state.files.find((x) => x.name === f.name && !x.invoice);
+  if (again) {
+    const keep = (r) => r.status === 'created' || r.updated === true;
+    const before = state.add.length;
+    state.add = state.add.filter((r) => (r.fileId || 'old') !== again.id || keep(r));
+    if (!state.add.some((r) => (r.fileId || 'old') === again.id)) state.files = state.files.filter((x) => x !== again);
+    log(f.name + ' loaded again – replaced the old copy (' + (before - state.add.length) + ' rows).');
+  }
+  const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const fileMeta = Object.assign({ fileName: f.name }, meta);
+  if (/\.pdf$/i.test(f.name) || isImage(f.name)) {
+    let inv;
+    try { inv = isImage(f.name) ? await readInvoicePhoto(f) : await readInvoicePdf(f); } catch (err) { log(f.name + ': ' + err.message, 'err'); return false; }
+    if (inv.dupOf) { log(f.name + ': this invoice (' + inv.dupOf + ') is already loaded – skipped.', 'err'); return false; }
+    const rows = [];
+    inv.items.forEach((it) => {
+      const key = it.barcode || it.desc.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      const r = { barcode: it.barcode, inName: '', hint: it.name || it.desc, name: '', tname: '', category: '', price: null, status: 'waiting', use: it.shipped > 0, fileId: id,
+        note: it.status ? it.status + ' – not delivered' : (it.unsure ? 'read from a photo – check this line' : '') };
+      setNames(r, it.name || INV.tidyName(it.desc), '');
+      r.nameFromInvoice = true;
+      rows.push(r);
+    });
+    state.files.push({ id, name: (inv.supplier || 'Invoice').replace(/ Pty Ltd/i, '') + ' #' + (inv.number || f.name) + (inv.date ? ' · ' + inv.date : ''), open, invoice: inv.id, meta: fileMeta, photo: !!inv.photo });
+    state.add.push(...rows);
+    log('Loaded ' + rows.length + ' items from ' + (inv.photo ? 'the photo ' : 'invoice ') + (inv.number || f.name) + sourceNote(fileMeta));
+    return true;
+  }
+  const raw = await readSheet(f);
+  const res = itemsFromSheet(raw, null, id, seen);
+  if (!res.items.length) { log(f.name + ': no barcodes or names found – use "Columns…" after loading to pick them.', 'err'); }
+  state.files.push({ id, name: f.name, open, raw: raw.slice(0, 5000), picks: res.picks, repeats: res.repeats, meta: fileMeta });
+  state.add.push(...res.items);
+  if (!res.items.length) state.add.push({ barcode: '', inName: '(no rows read)', hint: '', name: '', tname: '', status: 'not found', use: false, fileId: id, note: 'Click "Columns…" on this file' });
+  log('Loaded ' + res.items.length + ' items from ' + f.name + sourceNote(fileMeta) + (res.repeats.length ? ' (' + res.repeats.length + ' rows were the same barcode again: ' + Array.from(new Set(res.repeats)).join(', ') + ' – shown once, marked ×2)' : ''));
+  return true;
+}
+function sourceNote(meta) {
+  if (!meta || meta.source === 'computer' || !meta.source) return '';
+  if (meta.source === 'gmail') return ' (Gmail ' + (meta.account || '') + ', from ' + (meta.from || '?') + ')';
+  return ' (' + meta.source + (meta.account ? ' ' + meta.account : '') + ')';
+}
+function fmtTime(t) { return t ? new Date(t).toLocaleString('en-AU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''; }
+// one line for the file's row: where it came from and when
+function sourceLine(meta) {
+  if (!meta) return '';
+  const got = meta.fetchedAt ? 'added ' + fmtTime(meta.fetchedAt) : '';
+  if (meta.source === 'gmail') return 'Gmail (' + (meta.account || '') + ') · from ' + (meta.from || '?') + ' · "' + (meta.subject || '') + '" · email ' + fmtTime(meta.emailAt) + ' · ' + got;
+  if (meta.source === 'photo') return 'photo ' + (meta.fileName || '') + ' · ' + got;
+  if (meta.source === 'Woolworths' || meta.source === 'Coles') return meta.source + ' account ' + (meta.account || '') + ' · ' + got;
+  return 'your computer · ' + got;
+}
 
 async function fileAction(fid, act) {
   const f = state.files.find((x) => x.id === fid);
@@ -1308,13 +1385,13 @@ $('addDupes').addEventListener('click', () => {
   writeSheet(rows, 'posport-duplicate-barcodes-' + today() + '.xlsx', 'Duplicates');
   log(d.length + ' duplicate barcodes downloaded. Decide which item to keep, then delete the other one in the Back Office (the bot never deletes items).', 'ok');
 });
-$('addCombine').addEventListener('click', () => { try { combineAll(); } catch (e) { log('Combine failed: ' + e.message, 'err'); } });
+$('addTable').addEventListener('click', (e) => { if (e.target.id === 'oneListXlsx') { try { combineAll(); } catch (err) { log('Saving the list failed: ' + err.message, 'err'); } } });
 $('addRecheck').addEventListener('click', () => posJob('re-checking PosPort', () => recheckPos(false, true)));
 
 async function ensureCatalogue() {
   const age = state.catalogueAt ? (Date.now() - state.catalogueAt) / 3600000 : Infinity;
   if (state.catalogue.length && age < 12) return true;
-  const msg = state.catalogue.length ? 'Your PosPort item list was read ' + Math.round(age) + ' hours ago. Read it again so the bot knows exactly which items you already have? (about a minute)'
+  const msg = state.catalogue.length ? 'Your PosPort item list was read ' + Math.round(age) + ' hours ago. Read it again so the bot knows exactly which items you already have?\n\nThe PosPort tab will turn through all the pages of your Items list (about a minute) – that is normal, leave it running.'
     : 'Read your PosPort item list first, so the bot can tell which items you already have? (about a minute)';
   if (state.catalogueDeclined && state.catalogue.length) return true;
   if (state.catalogueDeclined) return false;
@@ -1807,10 +1884,19 @@ function combineStatus(r) {
   if (f.maybe && f.maybe.score >= 0.85) return { status: '⚠️ Check – similar name in Back Office', hint: f.maybe.name + ' (' + (f.maybe.barcode || 'no barcode') + ') ' + m(f.maybe.price) };
   return { status: '🆕 New', hint: f.maybe ? f.maybe.name + ' ' + m(f.maybe.price) : '' };
 }
-function combineAll() {
+let combinedCache = { key: '', val: null };
+function buildCombined() {
+  let h = 0;
+  const sig = state.add.length + ':' + (state.catalogueAt || 0) + ':' + state.catalogue.length + ':' + state.add.map((r) => (r.barcode || '') + (r.status || '') + (r.pos ? 'p' : '') + (r.fileId || '')).join('|');
+  for (let i = 0; i < sig.length; i++) h = (h * 31 + sig.charCodeAt(i)) | 0;
+  const key = sig.length + ':' + h;
+  if (combinedCache.key === key) return combinedCache.val;
+  const val = buildCombinedNow();
+  combinedCache = { key, val };
+  return val;
+}
+function buildCombinedNow() {
   const files = (state.files || []).filter((f) => state.add.some((r) => (r.fileId || 'old') === f.id));
-  if (!files.length) { log('Load your sheets / invoices first, then press "Combine all files".', 'err'); return; }
-  if (!state.catalogue.length) { log('The bot has not read your Back Office list yet – press ↻ Re-check PosPort first.', 'err'); return; }
   const fileName = new Map(files.map((f) => [f.id, f.name]));
   const prod = new Map();
   state.add.forEach((r) => {
@@ -1834,6 +1920,7 @@ function combineAll() {
   const list = [...prod.values()].sort((a, b) => order(a.st.status) - order(b.st.status) || String(a.name).localeCompare(String(b.name)));
   const line = (p) => {
     const cost = p.costs.length ? R.round2(p.costs.reduce((a, b) => a + b, 0) / p.costs.length) : '';
+    const lo = p.costs.length ? Math.min(...p.costs) : 0, hi = p.costs.length ? Math.max(...p.costs) : 0;
     const bp = Number(p.st.posPrice), sp = Number(p.shopPrice);
     const note = p.st.dupes > 1 ? 'barcode is on ' + p.st.dupes + ' Back Office items'
       : p.st.posPrice === 0 ? 'Back Office price is $0'
@@ -1842,10 +1929,20 @@ function combineAll() {
       Status: p.st.status, Barcode: p.barcode, 'Invoice / sheet name': p.name, 'Back Office name': p.st.posName || '',
       'Back Office price': p.st.posPrice === undefined ? '' : p.st.posPrice, 'Back Office barcode': p.st.posBarcode || '',
       'Shop product': p.shopName, 'Shop normal price': p.shopPrice, 'Unit cost': cost, 'Barcode from': p.from,
+      'Cost changed': hi - lo >= 0.01 ? '$' + lo.toFixed(2) + ' → $' + hi.toFixed(2) : '',
       Files: [...p.files].filter(Boolean).join(', '), 'Similar Back Office item': p.st.hint || '', 'Price note': note,
     };
   };
   const rows = list.map(line);
+  const count = {};
+  rows.forEach((x) => { count[x.Status] = (count[x.Status] || 0) + 1; });
+  return { files, list, rows, count, order };
+}
+// the one list across all files, saved as Excel (only when you ask for it)
+function combineAll() {
+  if (!state.add.length) { log('Load your sheets / invoices first.', 'err'); return; }
+  if (!state.catalogue.length) { log('The bot has not read your Back Office list yet – press ↻ Re-check PosPort first.', 'err'); return; }
+  const { files, list, rows, count, order } = buildCombined();
   const wb = XLSX.utils.book_new();
   const add = (name, data, widths) => {
     const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ '': 'nothing here' }]);
@@ -1853,9 +1950,7 @@ function combineAll() {
     if (data.length) ws['!autofilter'] = { ref: ws['!ref'] };
     XLSX.utils.book_append_sheet(wb, ws, name);
   };
-  const W = [30, 16, 46, 36, 10, 16, 46, 10, 9, 22, 40, 44, 28];
-  const count = {};
-  rows.forEach((x) => { count[x.Status] = (count[x.Status] || 0) + 1; });
+  const W = [30, 16, 46, 36, 10, 16, 46, 10, 9, 22, 18, 40, 44, 28];
   const summary = [['Combined check – every product from every loaded file, decided by barcode'], [],
     ['Back Office items read', state.catalogue.length], ['Files', files.length], ['Products', rows.length], []]
     .concat(Object.keys(count).sort((a, b) => order(a) - order(b)).map((k) => [k, count[k]]))
@@ -1875,7 +1970,7 @@ function combineAll() {
   const used = new Set(list.filter((p) => p.barcode).map((p) => bcKey(p.barcode)));
   add('Back Office list', state.catalogue.slice().sort((a, b) => String(a.name).localeCompare(String(b.name))).map((c) => ({
     Barcode: c.barcode || '', Name: c.name, Price: c.price, 'In a loaded file': itemBarcodes(c).some((b) => used.has(bcKey(b))) ? 'yes' : '' })), [16, 46, 10, 16]);
-  XLSX.writeFile(wb, 'combined-check-' + saveStamp() + '.xlsx');
+  XLSX.writeFile(wb, 'one-list-all-files-' + saveStamp() + '.xlsx');
   log('Combined ' + files.length + ' files into ' + rows.length + ' products: ' + Object.keys(count).sort((a, b) => order(a) - order(b)).map((k) => count[k] + ' ' + k).join(', ') + ' (check your Downloads).', 'ok');
 }
 
@@ -3347,6 +3442,8 @@ function showTab(name) {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('hidden', p.id !== 'tab-' + name));
   if (name === 'tickets') renderTickets();
+  if (name === 'offers' && typeof renderResults === 'function') { renderResults(); renderPicked(); }
+  if (name === 'inbox' && typeof renderInbox === 'function') renderInbox();
 }
 document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 

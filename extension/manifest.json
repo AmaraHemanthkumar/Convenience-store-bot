@@ -1,29 +1,54 @@
 {
   "manifest_version": 3,
   "name": "Convenience Store Bot",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "description": "Adds new items to PosPort, checks prices against Woolworths and Coles, and prints shelf labels.",
-  "permissions": ["tabs", "scripting", "storage", "unlimitedStorage"],
+  "permissions": [
+    "identity",
+    "scripting",
+    "storage",
+    "tabs",
+    "unlimitedStorage"
+  ],
   "host_permissions": [
     "https://manager.posport.com.au/*",
     "https://www.woolworths.com.au/*",
     "https://www.coles.com.au/*",
     "https://world.openfoodfacts.org/*",
     "https://world.openbeautyfacts.org/*",
-    "https://world.openproductsfacts.org/*"
+    "https://world.openproductsfacts.org/*",
+    "https://gmail.googleapis.com/*",
+    "https://www.googleapis.com/*"
   ],
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_title": "Open Convenience Store Bot",
-    "default_icon": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
-  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "content_scripts": [
     {
-      "matches": ["https://manager.posport.com.au/*"],
-      "js": ["core/posport-capture.js"],
+      "matches": [
+        "https://manager.posport.com.au/*"
+      ],
+      "js": [
+        "core/posport-capture.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start"
     }
-  ]
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
 }

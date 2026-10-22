@@ -555,8 +555,11 @@ def main():
         assert dws.max_row == 3
         # Combine all files: one Excel, one line per product across every file, decided by barcode
         page.evaluate("document.getElementById('log').textContent = ''")
+        page.click("#addFilter button[data-f=one]")
+        wait_until(page, lambda: page.locator("#oneListXlsx").count() == 1, 30000)
+        print("one list:", page.inner_text("#addTable").split("\n")[0][:200])
         with page.expect_download() as dl:
-            page.click("#addCombine")
+            page.click("#oneListXlsx")
         cwb = load_workbook(save_xlsx(dl.value))
         print("combine sheets:", cwb.sheetnames, "|", [l for l in page.inner_text("#log").split("\n") if "Combined" in l][:1])
         assert cwb.sheetnames[:5] == ["Summary", "All products", "New – create these", "Check these", "Already in Back Office"], cwb.sheetnames

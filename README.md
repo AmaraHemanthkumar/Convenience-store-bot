@@ -29,6 +29,18 @@ After you download a newer version, press the ↻ reload button on the extension
 
 Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths, Coles and PosPort in their own tabs and works in them, so leave those tabs open while it runs.
 
+### 📥 Inbox (new in 3.5)
+- **Gmail:** fetches invoice PDFs, Excel sheets and photos sent by your **approved senders** only (add / remove them any time; a whole company as `@supplier.com.au`). Link one or more Gmail accounts (read-only). Pick a sender or all of them, and how far back (today, 7 / 30 / 90 days, or since a date), then press **Fetch from Gmail**. One-time setup: a free Google OAuth client ID (steps are in the tab). In Brave, turn on `brave://settings/extensions` › *Allow Google login for extensions* if the sign-in window does not open.
+- **Woolworths / Coles invoices:** uses the account you are logged in to in this browser – type an account name (e.g. *Shop*, *Home*), log in to the next account and press again for a second one. Passwords are never stored. Invoices downloaded before are skipped. Coles may show a robot check: the bot stops and tells you.
+- **Printed invoices:** a photo is read on your own computer (no internet, about a minute per page on a slow laptop). Lines it was unsure of are marked *check this line*.
+- **Fetch history:** every file with where it came from (Gmail account, sender, subject, email time / shop account / photo / your computer) and when it was added. The same attachment is never loaded twice. Each file's row in Items & prices shows the same details.
+
+### Offers (new in 3.5)
+Type part of a name (`1.25`, `coke`) – every matching Back Office item shows straight away. Tick the items, choose *any N for $X* or *all together for $X* (meal deal), and save. The bot shows what customers save, makes offer tickets and an Excel list. Filling PosPort's combo screen comes next, after we have looked at that screen together.
+
+### One list across all files (new in 3.5)
+The **One list (all files)** button above the table shows every product once, however many files it is on: ✅ already in the Back Office / 🆕 new / ⚠️ check, which files it is on, and whether the cost changed between invoices. Rows that are on other files say *also on N other files – created once*. **Save this list to Excel** keeps a copy.
+
 ### 1 · Items & prices (new items and price checks in one go)
 1. **Choose Excel files** (one or several at once), or scan barcodes into the scan box.
    - **Each file becomes one row** with its name, progress and counts: new · in PosPort · flagged · to check.

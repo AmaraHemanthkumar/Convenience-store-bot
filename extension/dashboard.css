@@ -228,3 +228,14 @@ tr.locked input, tr.locked select, tr.locked button { pointer-events: none; }
 .fshopbtn { padding: 2px 9px; font-size: 12px; margin-right: 5px; white-space: nowrap; }
 .shopbtn.on, .fshopbtn.on { background: #e6f4ec; border-color: #1f8a4c; color: #1f6b3c; }
 .shopbtn.off, .fshopbtn.off { background: #f1f1f1; border-color: #bbb; color: #888; text-decoration: line-through; }
+.also-in { color: #6b4fa0; }
+.fsrc { font-size: 11px; font-weight: normal; }
+.chiplist { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 12px; background: #eef2f7; border: 1px solid #d5dce6; font-size: 12px; }
+.chip.off { opacity: .55; }
+.chip button { border: 0; background: none; cursor: pointer; padding: 0 2px; font-size: 13px; }
+.wide-input { min-width: 320px; flex: 1; }
+.small-text { width: 140px; }
+.inline-h { margin: 0 8px 0 0; font-size: 15px; }
+.of-results { max-height: 320px; overflow: auto; }
+.hidden { display: none !important; }
