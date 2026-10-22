@@ -628,6 +628,27 @@ function costHTML(r, price) {
     (mg !== null ? ' · ' + mg + '% margin' : '') + (inv.rrp ? ' · RRP ' + m(inv.rrp) : '') + '</span>';
 }
 
+// A shop's price in one row can be ignored (e.g. it matched a different pack size): ✕ / use again
+function rowStoreCell(r, k) {
+  const s = r[k];
+  const off = r.ignore && r.ignore[k];
+  if (!s || !s.found) return storeCell(s);
+  return '<div class="' + (off ? 'ignored' : '') + '">' + storeCell(s) + '</div>' +
+    '<button class="fx small shop-ign" data-k="' + k + '" title="' + (off ? 'Use this price again' : 'Wrong product? Ignore this shop for this row') + '">' + (off ? '↺ use' : '✕ ignore') + '</button>';
+}
+// highest normal price of the shops that are not ignored for this row
+function rowHighest(r) {
+  const ok = (k) => r[k] && r[k].found && !(r.ignore && r.ignore[k]);
+  return R.highestPrice(ok('ww') ? r.ww.regular : null, ok('coles') ? r.coles.regular : null);
+}
+function repriceRow(r) {
+  r.highest = rowHighest(r);
+  if (r.pos) {
+    r.chk = R.checkExistingPrice(r.pos.price, r.highest, S);
+    if (!r.apply) r.newPrice = r.chk.flagged ? r.chk.suggested : null;
+  } else if (!r.priceEdited && !r.overridePrice && r.status !== 'created') r.price = priceFor(r);
+}
+
 function rowHTML(r, i) {
   const pos = !!r.pos;
   const len = (r.name || '').length, tlen = (r.tname || '').length;
@@ -642,7 +663,7 @@ function rowHTML(r, i) {
     (pos ? '<td><input type="checkbox" class="apply" title="Save the new price / name to PosPort" ' + (r.apply ? 'checked' : '') + '></td>'
          : '<td><input type="checkbox" class="use" title="Create this item" ' + (r.use !== false ? 'checked' : '') + '></td>') +
     '<td><input type="text" class="bcedit" inputmode="numeric" value="' + esc(r.barcode || '') + '" placeholder="barcode" title="Wrong barcode? Change it here – the row is looked up again">' + (r.copies > 1 ? '<span class="sub">×' + r.copies + ' in this sheet</span>' : '') + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
-    '<td>' + (r.status === 'waiting' ? '<span class="muted">…</span>' : storeCell(r.ww)) + '</td><td>' + (r.status === 'waiting' ? '' : storeCell(r.coles)) + '</td>' +
+    '<td>' + (r.status === 'waiting' ? '<span class="muted">…</span>' : rowStoreCell(r, 'ww')) + '</td><td>' + (r.status === 'waiting' ? '' : rowStoreCell(r, 'coles')) + '</td>' +
     '<td class="invcell">' + (r.status === 'waiting' ? '' : invoiceCellHTML(r, pos ? (r.newPrice || r.pos.price) : r.price)) + '</td>' +
     '<td class="num">' + m(r.highest) + '</td>' +
     (pos
@@ -825,6 +846,14 @@ $('addTable').addEventListener('click', (e) => {
   const tr = e.target.closest('tr[data-i]');
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
+  const ign = e.target.closest('.shop-ign');
+  if (ign) {
+    const k = ign.dataset.k;
+    r.ignore = Object.assign({}, r.ignore, { [k]: !(r.ignore && r.ignore[k]) });
+    repriceRow(r); replaceRow(r); saveState(); refreshButtons();
+    log((r.ignore[k] ? 'Ignoring ' : 'Using ') + STORES[k].label + ' for ' + (r.name || r.barcode) + ' – highest is now ' + m(r.highest) + '.');
+    return;
+  }
   const use = e.target.closest('.inv-use');
   if (use) {      // one-click price from the invoice (cost + margin, or RRP)
     const p = Number(use.dataset.p);
@@ -1315,7 +1344,7 @@ async function storeCatchUp(r) {
     r[k] = x;
     r.storePending = r.storePending.filter((z) => z !== k);
   }
-  r.highest = R.highestPrice(r.ww && r.ww.found ? r.ww.regular : null, r.coles && r.coles.found ? r.coles.regular : null);
+  r.highest = rowHighest(r);
   if (r.pos) { r.chk = R.checkExistingPrice(r.pos.price, r.highest, S); if (!r.apply && r.chk.flagged) r.newPrice = r.chk.suggested; }
   else if (!r.priceEdited && !r.overridePrice && r.status !== 'created') r.price = priceFor(r);
   if (r.status === 'not found' && r.highest) { r.status = 'check'; r.note = 'price found on the second try – please check'; }
@@ -1337,6 +1366,7 @@ async function lookupOne(r) {
     }
   }
   r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
+  if (r.ignore && (r.ignore.ww || r.ignore.coles)) { r.highest = rowHighest(r); res.highest = r.highest; }
   r.storePending = ['ww', 'coles'].filter((k) => res[k] && (res[k].paused || res[k].off));      // that shop was paused or off: ask it later
   const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
   // a line from a Woolworths / Coles invoice has no barcode: take it from the shop's product
@@ -1849,15 +1879,24 @@ function scanCatalogue(insideJob) {
 async function scanCatalogueNow() {
   {
     if (!(await posGo('/catalog/items', 'items'))) { log('Items page did not open.', 'err'); return; }
+    const cl = await pos('clearListSearch', S.delayMs);
+    if (cl && cl.cleared) await sleep(1500);
     const seen = new Map();
-    for (let page = 1; page <= 200; page++) {
-      if (stopRequested) break;
+    let pagesRead = 0, stoppedEarly = false;
+    for (let page = 1; page <= 400; page++) {
+      if (stopRequested) { stoppedEarly = true; break; }
       const res = await pos('readListRows');
       (res && res.rows || []).forEach((r) => seen.set(r.name.toLowerCase(), { name: r.name, price: r.price, href: r.href }));
+      pagesRead = page;
       $('chkScanInfo').textContent = 'Page ' + page + ' · ' + seen.size + ' items';
-      const nx = await pos('nextPage', S.delayMs);
-      if (!nx || !nx.ok) break;
+      $('addScanInfo').textContent = 'Reading your PosPort list… page ' + page + ' · ' + seen.size + ' items';
+      let nx = await pos('nextPage', S.delayMs);
+      // a slow page is tried again (up to 3 times) instead of being taken as the end of the list
+      for (let t = 0; t < 3 && nx && nx.slow; t++) { await sleep(2000); nx = await pos('nextPage', S.delayMs + 1000); }
+      if (!nx || !nx.ok) { stoppedEarly = !!(nx && nx.slow); break; }
     }
+    const shown = await pos('listTotal');
+    const said = shown && shown.total;
     const cap = await pos('captured');
     const capItems = (cap && cap.items) || [];
     // the network copy has ids and barcodes; check its price units against what is on screen
@@ -1873,8 +1912,21 @@ async function scanCatalogueNow() {
       const bcs = (c.barcodes && c.barcodes.length ? c.barcodes : [c.barcode]).map((b) => R.cleanBarcode(b)).filter(Boolean);
       seen.set(k, Object.assign(cur, { id: c.id, barcode: bcs[0] || '', barcodes: bcs, category: c.category }));
     });
-    state.catalogue = Array.from(seen.values());
+    // Never lose items: if this read found far fewer items than last time (a slow page, a filter left on),
+    // keep the items from last time too and say so
+    const prev = state.catalogue || [];
+    const fresh = Array.from(seen.values());
+    let kept = 0;
+    if (prev.length && fresh.length < prev.length * 0.8) {
+      const have = new Set(fresh.map((c) => c.name.toLowerCase()));
+      prev.forEach((c) => { if (!have.has(c.name.toLowerCase())) { fresh.push(c); kept++; } });
+    }
+    state.catalogue = fresh;
     state.catalogueAt = Date.now();
+    if (kept || stoppedEarly || (said && seen.size < said * 0.95)) {
+      log('Only ' + seen.size + ' PosPort items could be read this time' + (said ? ' (PosPort says ' + said + ')' : '') + ' after ' + pagesRead + ' pages' +
+        (kept ? ' – kept ' + kept + ' items from the last full read so nothing is wrongly shown as new.' : '.') + ' Press ↻ Re-check PosPort again in a minute.', 'err');
+    }
     const st = catalogueBarcodeStats();
     $('chkScanInfo').textContent = st.total + ' items · ' + st.real + ' with a real barcode';
     log('Read ' + st.total + ' PosPort items – ' + st.real + ' have a real barcode.' + (st.total && st.real < st.total * 0.5 ?

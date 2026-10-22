@@ -408,9 +408,30 @@
     if (disabled) return { ok: false, last: true };
     const before = JSON.stringify(listRows().map((r) => r.name));
     realClick(next);
-    const changed = await waitFor(() => JSON.stringify(listRows().map((r) => r.name)) !== before, 5000);
+    const changed = await waitFor(() => JSON.stringify(listRows().map((r) => r.name)) !== before, 8000);
     await sleep(delay || 300);
-    return { ok: !!changed, last: !changed };
+    // the Next button is still there and enabled but the page did not change: slow, not the last page
+    return { ok: !!changed, last: false, slow: !changed };
+  }
+
+  // Clear any search left in the Items search box (a leftover search shows only part of the list)
+  async function clearListSearch(delay) {
+    const s = listSearchInput();
+    if (!s || !s.value) return { ok: true, cleared: false };
+    setValue(s, '');
+    s.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    s.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+    await sleep(delay || 800);
+    return { ok: true, cleared: true };
+  }
+
+  // "Showing 1-20 of 812", "812 items", "Page 1 of 41" … – how many items PosPort says it has
+  function listTotal() {
+    const txt = norm(document.body.innerText || '');
+    let m = txt.match(/\bof\s+([\d,]+)\s*(items|products|results|entries|records)?\b/i);
+    const total = m ? Number(m[1].replace(/,/g, '')) : null;
+    m = txt.match(/\bpage\s+\d+\s+of\s+(\d+)/i);
+    return { ok: true, total, pages: m ? Number(m[1]) : null };
   }
 
   async function openItem(name, delay) {
@@ -534,7 +555,7 @@
 
   root.CSB_POSPORT = {
     SEL, applyOverrides, pageInfo, bulkStatus, ensureRows, fillBulkRow, bulkGetCategories, clickCreate, cancelBulk,
-    readListRows, searchList, tickRow, clickPrintLabels, nextPage, openItem, readEditPrice, setEditPrice, setEditFields,
+    readListRows, searchList, tickRow, clickPrintLabels, nextPage, clearListSearch, listTotal, openItem, readEditPrice, setEditPrice, setEditFields,
     captured, clearCaptured, toasts, menuLinks, readTable,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

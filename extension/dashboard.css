@@ -218,3 +218,6 @@ tr.locked input, tr.locked select, tr.locked button { pointer-events: none; }
 .shops { display: flex; gap: 10px; align-items: center; margin-left: auto; font-size: 13px; }
 .shops label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
 .why-new { color: var(--muted, #777); max-width: 220px; white-space: normal; }
+.ignored { opacity: .45; text-decoration: line-through; }
+.shop-ign { font-size: 11px; padding: 0 6px; margin-top: 3px; border: 1px solid #ddd; border-radius: 9px; background: #fff; cursor: pointer; color: #666; }
+.shop-ign:hover { border-color: var(--bad, #c8102e); color: var(--bad, #c8102e); }

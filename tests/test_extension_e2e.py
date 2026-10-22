@@ -333,6 +333,14 @@ def main():
         page.check("#useColes")
         wait_until(page, lambda: "$4.50" in r6(), 60000)
         print("coles off/on:", " ".join(r6().split())[:120])
+        # ignore Coles for just this row (wrong pack size): highest drops to the Woolworths price
+        rw = page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682066666']")).first
+        rw.locator(".shop-ign[data-k=coles]").click()
+        wait_until(page, lambda: "highest is now $4.20" in page.inner_text("#log"))
+        rw = page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682066666']")).first
+        assert rw.locator(".shop-ign[data-k=coles]").inner_text().strip() == "↺ use"
+        rw.locator(".shop-ign[data-k=coles]").click()
+        wait_until(page, lambda: "highest is now $4.50" in page.inner_text("#log"))
 
         # Several files at once: every file moves forward together (not one file after the other)
         page.click("[data-tab=add]")
