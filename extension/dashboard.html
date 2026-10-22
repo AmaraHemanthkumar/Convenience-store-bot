@@ -289,6 +289,10 @@
           <textarea id="s_abbrevs" rows="4" placeholder="Classic=CLS&#10;Special=SPL&#10;Chocolate=CHOC"></textarea></label>
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
         <label>Items looked up at the same time (1–6)<input type="number" id="s_parallel" min="1" max="6"></label>
+        <label>Already in PosPort when…<select id="s_matchBy">
+          <option value="barcode">the barcode is in PosPort (a matching name is only suggested)</option>
+          <option value="name">the barcode, or the name + size, is in PosPort</option>
+        </select></label>
         <label>Loading a saved file: re-use its Woolworths/Coles prices if it is younger than (hours)<input type="number" step="1" min="0" id="s_reuseHours"></label>
         <label>Gap between requests to the same shop (ms) – bigger = gentler on Woolworths/Coles<input type="number" step="100" min="300" id="s_storeGapMs"></label>
         <label>Margin on invoice cost (%) – used for "cost + margin" prices and when an item isn't at Woolworths/Coles<input type="number" id="s_fallbackMargin"></label>

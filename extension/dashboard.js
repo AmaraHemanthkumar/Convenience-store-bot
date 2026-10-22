@@ -580,7 +580,8 @@ function addStatusPill(r) {
   }
   if (r.looking) return '<span class="pill idle">looking up…</span>';
   const map = { waiting: 'idle', ready: 'ok', check: 'warn', 'not found': 'bad', created: 'ok', filled: 'warn', error: 'bad', skipped: 'idle' };
-  return '<span class="pill ' + (map[r.status] || 'idle') + '" title="' + esc(r.note || '') + '">' + esc(r.status === 'ready' ? 'new – ready' : r.status) + '</span>';
+  return '<span class="pill ' + (map[r.status] || 'idle') + '" title="' + esc(r.note || '') + '">' + esc(r.status === 'ready' ? 'new – ready' : r.status) + '</span>' +
+    (r.whyNew && r.status !== 'created' && r.status !== 'waiting' ? '<span class="sub why-new">why new: ' + esc(r.whyNew) + '</span>' : '');
 }
 
 const needsAttention = (r) => ['not found', 'error', 'check', 'filled'].includes(r.status) || !!r.maybe || r.updated === false ||
@@ -832,7 +833,7 @@ $('addTable').addEventListener('click', (e) => {
     if (f && head) head.outerHTML = groupHeadHTML(f);
     return;
   }
-  if (e.target.classList.contains('maybe-yes')) { markInPos(r, r.maybe); r.maybe = null; }
+  if (e.target.classList.contains('maybe-yes')) { markInPos(r, r.maybe); r.maybe = null; r.yesSame = true; r.whyNew = null; r.status = 'in PosPort'; }
   else if (e.target.classList.contains('maybe-no')) { r.maybe = null; r.notInPos = true; }
   else return;
   renderAdd(); saveState();
@@ -1084,7 +1085,7 @@ function markInPos(r, item) {
 function findInPos(r) {
   if (!state.catalogue.length) return { item: null };
   if (r.barcode) {
-    const b = state.catalogue.find((c) => c.barcode && R.sameBarcode(c.barcode, r.barcode));
+    const b = posByBarcode(r.barcode);
     if (b) return { item: b, how: 'barcode' };
   }
   // Trust supermarket names that were matched by barcode; a name-only match is used only if nothing better
@@ -1095,15 +1096,40 @@ function findInPos(r) {
   if (r.net) names.push([r.net.name, r.net.size].filter(Boolean).join(' '));
   if (r.inName) names.push(r.inName);
   if (r.hint) names.push(r.hint);
+  // Barcode decides (Settings): when the row has a barcode and your PosPort items have real barcodes,
+  // a name match is only offered as "Already in PosPort as …?" – it never decides on its own.
+  const st = barcodeStatsCached();
+  const byBarcode = (S.matchBy || 'barcode') === 'barcode' && r.barcode && st.real >= st.total * 0.5;
   let best = null;
   for (const n of names) {
     const mm = R.posMatch(n, state.catalogue, (c) => c.name);
-    if (mm.item && mm.sure) return { item: mm.item, how: 'name' };
-    if (mm.item && mm.score >= 0.5 && (!best || mm.score > best.score)) best = mm;
+    if (mm.item && mm.sure && !byBarcode) return { item: mm.item, how: 'name' };
+    if (mm.item && (mm.sure || mm.score >= 0.5) && (!best || mm.score > best.score)) best = mm;
   }
-  return { item: null, maybe: best ? Object.assign({ score: best.score }, best.item) : null };
+  const why = r.barcode
+    ? 'barcode ' + r.barcode + ' is not on any of your ' + st.real + ' PosPort items with a barcode' + (best ? '' : ', and no PosPort name is close')
+    : 'no barcode, and no PosPort name is close enough';
+  return { item: null, why, maybe: best ? Object.assign({ score: best.score }, best.item) : null };
+}
+let bcStats = null, bcStatsKey = '';
+function barcodeStatsCached() {
+  const key = (state.catalogueAt || 0) + ':' + state.catalogue.length;
+  if (key !== bcStatsKey) { bcStats = catalogueBarcodeStats(); bcStatsKey = key; }
+  return bcStats;
 }
 
+// A PosPort item with this barcode (any of its barcodes – an item can have several, e.g. one per variant)
+function posByBarcode(bc) {
+  const k = R.cleanBarcode(bc || '').replace(/^0+/, '');
+  if (!k) return null;
+  return state.catalogue.find((c) => (c.barcodes && c.barcodes.length ? c.barcodes : [c.barcode]).some((b) => b && R.cleanBarcode(b).replace(/^0+/, '') === k)) || null;
+}
+// How many PosPort items have a real barcode (8-14 digits with a correct check digit)?
+function catalogueBarcodeStats() {
+  const list = state.catalogue || [];
+  const real = list.filter((c) => (c.barcodes && c.barcodes.length ? c.barcodes : [c.barcode]).some((b) => b && R.validBarcode(b) && /^\d{8,14}$/.test(R.cleanBarcode(b))));
+  return { total: list.length, real: real.length, odd: list.filter((c) => c.barcode && !real.includes(c)).slice(0, 5).map((c) => c.name + ' = ' + c.barcode) };
+}
 function showCatalogueAge() {
   if (!state.catalogue.length) { $('addScanInfo').textContent = 'PosPort not checked'; return; }
   const mins = state.catalogueAt ? Math.round((Date.now() - state.catalogueAt) / 60000) : null;
@@ -1115,21 +1141,34 @@ setInterval(() => { if (state.catalogue.length) showCatalogueAge(); }, 60000);
 // Read the PosPort list again and sort every row again (new / in PosPort) – no shop look-ups needed.
 async function recheckPos(quiet, insideJob) {
   await scanCatalogue(insideJob);
-  let moved = 0, newNow = 0;
+  let moved = 0, newNow = 0, demoted = 0;
   state.add.forEach((r) => {
     if (r.status === 'created' || r.status === 'waiting' || r.updated === true) return;
-    if (r.pos) {               // already in PosPort: refresh its price, or move it back to new if it was deleted
-      const c = catalogueEntry(r.pos) || (r.barcode && state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, r.barcode)));
+    if (r.pos && !r.locked) {   // already in PosPort: refresh its price
+      const byBc = r.barcode && posByBarcode(r.barcode);
+      const st = barcodeStatsCached();
+      // matched only by name earlier, but barcodes decide now and this barcode is not in PosPort: back to new,
+      // with the name match offered as a suggestion
+      if (!byBc && r.barcode && !r.yesSame && (S.matchBy || 'barcode') === 'barcode' && st.real >= st.total * 0.5) {
+        r.maybe = { name: r.pos.name, price: r.pos.price, id: r.pos.id };
+        r.pos = null; r.chk = null; r.newPrice = null; r.apply = false; r.use = true;
+        r.status = r.name && r.price > 0 ? 'check' : 'not found';
+        r.whyNew = 'barcode ' + r.barcode + ' is not on any of your ' + st.real + ' PosPort items with a barcode';
+        r.note = 'was matched by name only – is it the same item?';
+        demoted++; return;
+      }
+      const c = catalogueEntry(r.pos) || byBc;
       if (c) { r.pos.price = c.price; r.pos.name = c.name; r.chk = R.checkExistingPrice(c.price, r.highest, S); }
       return;
     }
     if (r.notInPos) return;    // you said "No, it's new"
     const found = findInPos(r);
     if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how + ' (re-check)'; moved++; }
-    else { newNow++; if (found.maybe) r.maybe = found.maybe; }
+    else { newNow++; r.whyNew = found.why; if (found.maybe) r.maybe = found.maybe; }
   });
   showCatalogueAge(); renderAdd(); saveState();
-  if (!quiet || moved) log('PosPort re-checked: ' + moved + ' items were already in PosPort and moved there, ' + newNow + ' are really new.', 'ok');
+  if (!quiet || moved || demoted) log('PosPort re-checked: ' + moved + ' items were already in PosPort and moved there, ' + newNow + ' are new' +
+    (demoted ? ', ' + demoted + ' had only matched by name (their barcode is not in PosPort) – each shows "Already in PosPort as …?" to confirm' : '') + '.', 'ok');
   return moved;
 }
 $('addRecheck').addEventListener('click', () => posJob('re-checking PosPort', () => recheckPos(false, true)));
@@ -1276,7 +1315,7 @@ async function lookupOne(r) {
   else { r.status = unsure ? 'check' : 'ready'; r.note = unsure ? 'Matched by name – please check it is the same product' : ''; }
   const found = r.notInPos ? { item: null } : findInPos(r);
   if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how; }
-  else if (found.maybe) r.maybe = found.maybe;
+  else { if (found.maybe) r.maybe = found.maybe; r.whyNew = found.why; }
 }
 
 // ---- update prices of items that are already in PosPort ----
@@ -1786,13 +1825,15 @@ async function scanCatalogueNow() {
     capItems.forEach((c) => {
       const k = c.name.toLowerCase();
       const cur = seen.get(k) || { name: c.name, price: R.round2(c.price / ratio) };
-      seen.set(k, Object.assign(cur, { id: c.id, barcode: R.cleanBarcode(c.barcode), category: c.category }));
+      const bcs = (c.barcodes && c.barcodes.length ? c.barcodes : [c.barcode]).map((b) => R.cleanBarcode(b)).filter(Boolean);
+      seen.set(k, Object.assign(cur, { id: c.id, barcode: bcs[0] || '', barcodes: bcs, category: c.category }));
     });
     state.catalogue = Array.from(seen.values());
     state.catalogueAt = Date.now();
-    const withBc = state.catalogue.filter((c) => c.barcode).length;
-    $('chkScanInfo').textContent = state.catalogue.length + ' items · ' + withBc + ' with barcode';
-    log('Scanned ' + state.catalogue.length + ' PosPort items (' + withBc + ' with barcodes).', 'ok');
+    const st = catalogueBarcodeStats();
+    $('chkScanInfo').textContent = st.total + ' items · ' + st.real + ' with a real barcode';
+    log('Read ' + st.total + ' PosPort items – ' + st.real + ' have a real barcode.' + (st.total && st.real < st.total * 0.5 ?
+      ' That is low: items without a barcode in PosPort can only be matched by name. Odd ones: ' + st.odd.join('; ') : ''), st.total && st.real < st.total * 0.5 ? 'err' : 'ok');
     saveState();
   }
 }
@@ -1819,7 +1860,7 @@ $('chkUseAll').addEventListener('click', () => {
 
 function matchCatalogue(inp) {
   if (inp.barcode) {
-    const b = state.catalogue.find((c) => c.barcode && R.sameBarcode(c.barcode, inp.barcode));
+    const b = posByBarcode(inp.barcode);
     if (b) return b;
   }
   if (inp.name) {
@@ -2159,7 +2200,7 @@ async function lblRunNow() {
       if (!isBarcode(line)) return line;
       const bc = line.replace(/\s/g, '');
       const c = capItems.find((x) => x.barcode && R.sameBarcode(x.barcode, bc)) ||
-        state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, bc));
+        posByBarcode(bc);
       if (c) return c.name;
       const a = state.add.find((x) => x.barcode && R.sameBarcode(x.barcode, bc) && x.name && (x.status === 'created' || x.status === 'filled'));
       return a ? a.name : line;
@@ -2537,7 +2578,7 @@ async function loadTicketFile(f) {
 // A pasted line can be "Name | Price | Barcode", or only a barcode: then the bot finds the item
 // in PosPort (barcode → product name → matching PosPort item and its price).
 async function ticketFromBarcode(bc) {
-  const byBc = state.catalogue.find((c) => c.barcode && R.sameBarcode(c.barcode, bc));
+  const byBc = posByBarcode(bc);
   if (byBc) return { full: byBc.name, price: byBc.price, barcode: bc };
   const fromAdd = state.add.find((r) => r.barcode && R.sameBarcode(r.barcode, bc) && (r.pos || r.status === 'created'));
   if (fromAdd) return { full: fromAdd.pos ? fromAdd.pos.name : fromAdd.name, price: fromAdd.pos ? fromAdd.pos.price : fromAdd.price, barcode: bc };
@@ -2789,7 +2830,7 @@ scanBox('buyScan', (code) => {
 });
 
 function buyPosCheck(r) {
-  const c = (r.barcode && state.catalogue.find((x) => x.barcode && R.sameBarcode(x.barcode, r.barcode))) ||
+  const c = (r.barcode && posByBarcode(r.barcode)) ||
     (r.name && state.catalogue.length ? (() => { const mm = R.posMatch(r.name, state.catalogue, (x) => x.name); return mm.sure ? mm.item : null; })() : null) ||
     (r.ww && r.ww.found && r.ww.name && state.catalogue.length ? (() => { const mm = R.posMatch(r.ww.name, state.catalogue, (x) => x.name); return mm.sure ? mm.item : null; })() : null);
   r.sell = c ? c.price : null; r.posName = c ? c.name : '';
@@ -2965,6 +3006,7 @@ function fillSettings() {
   $('addMarkupPct').value = S.markupPct || 0;
   $('addBasis').value = S.priceBasis || 'shops';
   $('useWW').checked = S.useWW !== false; $('useColes').checked = S.useColes !== false;
+  $('s_matchBy').value = S.matchBy || 'barcode';
   $('addInvMargin').value = S.fallbackMargin || 40;
   R.setAbbreviations(S.abbrevs || '');
   document.querySelectorAll('.lowLbl').forEach((x) => { x.textContent = m(S.flagLow); });
@@ -2973,6 +3015,7 @@ function fillSettings() {
 $('sSave').addEventListener('click', async () => {
   NUM_KEYS.forEach((k) => { const v = parseFloat($('s_' + k).value); if (isFinite(v)) S[k] = v; });
   S.extraBlankRow = $('s_extraBlankRow').checked;
+  S.matchBy = $('s_matchBy').value;
   S.parallel = Math.max(1, Math.min(6, Math.round(S.parallel || 3)));
   S.autoCreate = $('s_autoCreate').checked;
   S.shortInPosPort = $('s_shortInPosPort').checked;

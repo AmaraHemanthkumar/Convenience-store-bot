@@ -485,6 +485,27 @@ def main():
         print("mock Back Office now:", kept)
         assert '"Allens Minties Bag 150g",6.2,103' in kept, kept
         assert "saved and checked in PosPort" in page.inner_text("#log"), page.inner_text("#log")[:400]
+
+        # PosPort's own item data has real barcodes (one only inside a variant, SKUs are not barcodes):
+        # Re-check reads them, and rows that had only matched by NAME go back to new, with the reason shown
+        pos.evaluate("""() => localStorage.setItem('__csb_items', JSON.stringify({
+          101: {id: '101', name: '5 Gum Grape Spark 27g', price: 0.5, barcode: '9300000001016', barcodes: ['9300000001016']},
+          102: {id: '102', name: 'A2 Full Cream 2L', price: 7.5, barcode: '9300000001023', barcodes: ['9300000001023']},
+          103: {id: '103', name: 'Allens Minties Bag 150g', price: 6.2, barcode: '9300682012345', barcodes: ['9300682012345']},
+          104: {id: '104', name: 'Allens Minties Party 500g', price: 9, barcode: '9300000001047', barcodes: ['9300000001047']},
+          105: {id: '105', name: 'Aramada Foil Trays med 3pack', price: 5.99, barcode: '9300000001054', barcodes: ['9300000001054']},
+          110: {id: '110', name: 'Huggies Gentle Cleanse Baby Wipes Fragrance Free 80 Pack', price: 4.99, barcode: '9300000001108', barcodes: ['9300000001108']}}))""")
+        page.click("[data-tab=add]")
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.click("#addRecheck")
+        wait_until(page, lambda: "PosPort re-checked" in page.inner_text("#log"), 120000)
+        lg = page.inner_text("#log")
+        print("barcode re-check:", " ".join(lg.split("\n")[0].split())[:220], "|", [l for l in lg.split("\n") if "real barcode" in l][:1])
+        assert "had only matched by name" in lg and "have a real barcode" in lg, lg[:600]
+        page.locator("#addTable tr.fhead").filter(has_text="many0.xlsx").first.locator("button.tog").click()
+        page.click("#addFilter button[data-f=all]")
+        wait_until(page, lambda: page.locator("#addTable .why-new").count() > 0, 10000)
+        print("why new example:", page.locator("#addTable .why-new").first.inner_text())
         assert errors == [], errors
         ctx.close()
     print("extension end-to-end test passed")

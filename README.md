@@ -54,7 +54,8 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
    - asks when it's unsure: *"Already in PosPort as …? Yes, same item / No, it's new"*.
 2. Use the filters (**All · New · Already in PosPort · Needs attention**) and edit anything you like.
    - **Markup $ and Markup %** change all new prices at once: price = highest supermarket price × (1 + %) + $. For example $1.50 + 0% (the default), or $0 + 30%, or $1 + 20%.
-   - **How "new" is decided:** the bot compares each barcode (then name + size) with its copy of your PosPort item list. The copy's age shows next to *Look up again*. If you added items in PosPort since then, press **↻ Re-check PosPort**: it reads the list again and moves rows that now exist to *Already in PosPort*, without asking the shops again. Before **Create**, the bot does this by itself when the copy is more than an hour old, so nothing is created twice.
+   - **How "new" is decided:** by **barcode**. When the bot reads your PosPort list, it collects every barcode each item has, including ones inside variants. SKUs and PLUs only count if they look like a barcode. An item whose barcode is not in PosPort is **new**, and the row says why (*"why new: barcode … is not on any of your … PosPort items"*). A PosPort item with a similar name is only offered as *"Already in PosPort as …? Yes / No"*; it never decides on its own. Settings can switch back to "barcode or name". If PosPort itself has few real barcodes, the log warns you and names count again.
+   - **↻ Re-check PosPort** reads the list again (do it after adding items in PosPort, and once after updating to 3.1). Rows that had only matched by name, and whose barcode is not in PosPort, go back to new with the suggestion. The age of the bot's copy shows next to *Look up again*. Before **Create**, a copy older than an hour is read again by itself, so nothing is created twice.
    - **Invoice column** (next to Woolworths and Coles): what you paid for one unit on the newest invoice that has this item, plus the supplier, invoice number and date, the supplier RRP, and the margin at our price (red below your lowest margin). Two buttons set the price in one click: **cost + margin %** or **RRP**. For items already in PosPort, the click goes into the new price and ticks the row, ready for *Save changes*.
    - **New prices from:** *Shops* (highest + markup, the default) · *Shops, but never below invoice cost + margin* (safest – you never sell under your margin) · *Invoice cost + margin* · *Supplier RRP*. The *cost + %* box next to it sets the margin. The note under each price says where it came from.
    - **Wrong barcode?** Click it in the row, type the right one and press Tab. That row is looked up again by itself.
@@ -247,6 +248,7 @@ If a step fails, send a screenshot of the PosPort screen together with the messa
 ```
 node tests/rules.test.js                 # pricing / names / categories
 node tests/invoice.test.js               # supplier invoice PDF lines -> unit cost
+node tests/capture.test.js               # barcodes read from PosPort's own item data
 python tests/test_invoice_pdfs.py [x.pdf]  # reads made-up wholesale / Woolworths / Coles PDFs (or your own files)
 python tests/test_posport_mock.py        # PosPort actions on the mock page
 python tests/test_extension_e2e.py       # whole extension with fake Woolworths/Coles/PosPort

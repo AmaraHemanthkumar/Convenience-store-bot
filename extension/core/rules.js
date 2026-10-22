@@ -17,6 +17,7 @@
     delayMs: 700,          // pause between website actions
     parallel: 3,           // how many items are looked up at the same time (1-6)
     priceBasis: 'shops',   // new prices from: shops | higher (shops or invoice cost + margin, whichever is higher) | invoice | rrp
+    matchBy: 'barcode',    // new or already in PosPort: 'barcode' (a name match is only suggested) or 'name' (name + size also counts)
     reuseHours: 24,        // loading a saved file younger than this re-uses its shop prices (no new look-ups)
     useWW: true,           // ask Woolworths (untick at the top of the bot to skip it and go faster)
     useColes: true,        // ask Coles

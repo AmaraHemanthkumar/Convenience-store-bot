@@ -14,7 +14,9 @@
   const ID_KEYS = ['id', '_id', 'uuid', 'itemId', 'item_id'];
   const NAME_KEYS = ['name', 'itemName', 'item_name', 'displayName', 'title'];
   const PRICE_KEYS = ['price', 'sellingPrice', 'selling_price', 'salePrice', 'basePrice', 'base_price', 'defaultPrice', 'retailPrice', 'unitPrice', 'amount'];
-  const BARCODE_KEYS = ['barcode', 'barCode', 'bar_code', 'upc', 'ean', 'gtin', 'sku', 'plu'];
+  // real barcode fields first; an SKU / PLU / code is only used when it looks like a barcode (8-14 digits)
+  const BARCODE_KEYS = ['barcode', 'barCode', 'bar_code', 'barcodeNumber', 'barcode_number', 'upc', 'ean', 'ean13', 'gtin', 'apn'];
+  const MAYBE_KEYS = ['sku', 'plu', 'code', 'itemCode', 'item_code', 'productCode'];
   const CAT_KEYS = ['categoryName', 'category_name', 'category'];
 
   function pick(o, keys) {
@@ -33,12 +35,35 @@
     return { value: cents ? n / 100 : n, key: p.key };
   }
 
-  function barcodeOf(o) {
-    let b = pick(o, BARCODE_KEYS);
-    if (!b && Array.isArray(o.barcodes) && o.barcodes.length) b = { value: o.barcodes[0].code || o.barcodes[0].barcode || o.barcodes[0] };
-    if (!b && Array.isArray(o.variants) && o.variants[0]) b = pick(o.variants[0], BARCODE_KEYS);
-    return b ? String(typeof b.value === 'object' ? JSON.stringify(b.value) : b.value) : '';
+  const digits = (v) => String(v === null || v === undefined ? '' : v).replace(/\s/g, '');
+  const looksLikeBarcode = (v) => /^\d{8,14}$/.test(digits(v));
+  function gs1ok(b) {
+    const d = digits(b);
+    if (!/^\d{8,14}$/.test(d)) return false;
+    let sum = 0;
+    for (let i = d.length - 2, w = 3; i >= 0; i--, w = 4 - w) sum += Number(d[i]) * w;
+    return (10 - (sum % 10)) % 10 === Number(d[d.length - 1]);
   }
+  // Every barcode an item has: top-level fields, a barcodes list, and each variant (sizes / flavours).
+  function barcodesOf(o) {
+    const found = [];
+    const add = (v) => {
+      if (v && typeof v === 'object') v = v.code || v.barcode || v.value || v.number || '';
+      const d = digits(v);
+      if (d && !found.includes(d)) found.push(d);
+    };
+    const fromObj = (x) => {
+      if (!x || typeof x !== 'object') return;
+      BARCODE_KEYS.forEach((k) => { if (x[k] !== undefined && x[k] !== null && x[k] !== '') (Array.isArray(x[k]) ? x[k] : [x[k]]).forEach(add); });
+      ['barcodes', 'barCodes', 'eans', 'upcs'].forEach((k) => { if (Array.isArray(x[k])) x[k].forEach(add); });
+      MAYBE_KEYS.forEach((k) => { if (looksLikeBarcode(x[k])) add(x[k]); });
+    };
+    fromObj(o);
+    ['variants', 'items', 'skus', 'options'].forEach((k) => { if (Array.isArray(o[k])) o[k].slice(0, 50).forEach(fromObj); });
+    // real barcodes first (8-14 digits with a correct check digit), then other digit codes
+    return found.sort((a, b) => (gs1ok(b) - gs1ok(a)) || (looksLikeBarcode(b) - looksLikeBarcode(a)));
+  }
+  function barcodeOf(o) { return barcodesOf(o)[0] || ''; }
 
   function asItem(o) {
     if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
@@ -55,6 +80,7 @@
       price: price.value,
       priceKey: price.key,
       barcode: barcodeOf(o),
+      barcodes: barcodesOf(o),
       category: cat ? String(cat.value) : '',
       active: o.isActive !== undefined ? !!o.isActive : (o.status !== undefined ? String(o.status) : ''),
       seen: Date.now(),
@@ -106,6 +132,8 @@
       }
     } catch (e) { /* not JSON */ }
   }
+
+  window.__CSB_CAPTURE = { asItem, barcodesOf, collect };      // used by the bot's own tests
 
   const origFetch = window.fetch;
   window.fetch = function () {

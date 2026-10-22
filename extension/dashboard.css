@@ -217,3 +217,4 @@ tr.locked input, tr.locked select, tr.locked button { pointer-events: none; }
 #posJobs { background: #eef5ff; border-color: #c9dcf5; }
 .shops { display: flex; gap: 10px; align-items: center; margin-left: auto; font-size: 13px; }
 .shops label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+.why-new { color: var(--muted, #777); max-width: 220px; white-space: normal; }
