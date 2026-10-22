@@ -65,6 +65,18 @@ Keep PosPort Back Office logged in in the same Chrome. The bot opens Woolworths,
 
 **Download Excel** saves the full comparison, and **Download failed items** saves everything that needs a hand-check.
 
+**💾 Save and carry on later:** each file row has **💾 Save**, and the toolbar has **💾 Save all**. You get one Excel file:
+- One readable sheet per file. *Item Name · Barcode · Price · Category* come first, ready for PosPort, then PosPort name and price, Woolworths, Coles, invoice cost, status and notes.
+- A hidden sheet holding everything the bot knows, including your edits, ticks and ticket names.
+
+Load that Excel again (*Choose Excel files*) to carry on exactly where you were, even in a newer version of the bot.
+- If the save is younger than 24 hours (Settings), its Woolworths and Coles prices are used as they are, with no new look-ups.
+- If it's older, prices are looked up again, but your typed names, prices and ticks are kept.
+
+**Woolworths / Coles on or off:** the tick boxes at the top (*Ask: Woolworths · Coles*) switch a shop off immediately, even mid-run. That's faster, and the shop's column shows *off*. Tick it again later and the bot fills in what it skipped.
+
+**Keep working while PosPort updates:** *Create*, *Save changes*, *Re-check PosPort* and label ticking are PosPort jobs that take turns in the background. A blue bar shows what is running and what is waiting, with *Stop after this item*. Only the rows being sent are greyed out. You can edit other files, load the next batch and look things up meanwhile.
+
 **Working while files load:** background look-ups never redraw the table while you are typing, clicking or scrolling. Finished rows wait and drop in about 2 seconds after you stop, and the page stays where you were. Only the small counts on each file row update straight away.
 
 ### Supplier invoice PDFs (used everywhere)

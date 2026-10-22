@@ -211,3 +211,9 @@ tr.fhead.open td { background: var(--accent-soft); }
 
 .store-notice { background: #fff6e6; }
 .store-notice .btn { margin-left: 6px; }
+
+tr.locked td { opacity: .55; }
+tr.locked input, tr.locked select, tr.locked button { pointer-events: none; }
+#posJobs { background: #eef5ff; border-color: #c9dcf5; }
+.shops { display: flex; gap: 10px; align-items: center; margin-left: auto; font-size: 13px; }
+.shops label { display: flex; gap: 4px; align-items: center; cursor: pointer; }

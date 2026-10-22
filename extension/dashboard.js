@@ -49,6 +49,31 @@ function setBusy(on) {
   if (!on) refreshButtons();
 }
 
+// ---- PosPort jobs take turns in the background, so the rest of the bot stays usable ----
+// Create / Save changes / reading the PosPort list each become a job; a second job waits for the first.
+// Only the rows that are being sent are locked; everything else can be edited, loaded or looked up meanwhile.
+let posQueue = Promise.resolve(), posWaiting = [], posRunning = null;
+function posJob(label, fn) {
+  const job = { label };
+  posWaiting.push(job); showPosJobs();
+  const run = posQueue.then(async () => {
+    posWaiting = posWaiting.filter((j) => j !== job); posRunning = job; stopRequested = false; showPosJobs();
+    try { return await fn(); } finally { posRunning = null; showPosJobs(); refreshButtons(); }
+  });
+  posQueue = run.catch(() => {});
+  return run;
+}
+function showPosJobs() {
+  const el = $('posJobs');
+  if (!el) return;
+  if (!posRunning && !posWaiting.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.classList.remove('hidden');
+  el.innerHTML = '<span><b>PosPort:</b> ' + (posRunning ? esc(posRunning.label) + '…' : '') +
+    (posWaiting.length ? ' · <b>waiting:</b> ' + posWaiting.map((j) => esc(j.label)).join(', ') : '') +
+    ' <span class="muted">– you can keep working on other files meanwhile.</span></span><button class="btn small" id="posJobStop">Stop after this item</button>';
+}
+document.addEventListener('click', (e) => { if (e.target.id === 'posJobStop') { stopRequested = true; log('Stopping after the current item…'); } });
+
 // Banner with several choices; resolves with the chosen label.
 function choose(text, labels) {
   return new Promise((resolve) => {
@@ -197,6 +222,19 @@ const storeTabOpening = {}, storeBlocked = {};
 // waits (1, 2, 4 … up to 10 minutes), reloads that shop's tab in the background and tries again by itself.
 // Rows that missed the shop get its price later. Only if it keeps refusing is there a note with a button.
 const storeCool = {}, storeStrikes = {}, storeReloading = {};
+// Woolworths / Coles can be switched off at the top of the bot (takes effect on the very next request)
+const storeOn = (kind) => (kind === 'ww' ? S.useWW : S.useColes) !== false;
+['ww', 'coles'].forEach((k) => {
+  const box = $(k === 'ww' ? 'useWW' : 'useColes');
+  box.addEventListener('change', () => {
+    S[k === 'ww' ? 'useWW' : 'useColes'] = box.checked;
+    chrome.storage.local.set({ settings: S });
+    const pending = state.add.filter((r) => (r.storePending || []).includes(k)).length;
+    log(STORES[k].label + (box.checked ? ' switched on' + (pending ? ' – filling in ' + pending + ' items it skipped.' : '.') : ' switched off – the bot skips it (faster). Tick it again any time to fill in its prices.'), 'ok');
+    if (box.checked) startLookup();
+    safeRenderAdd();
+  });
+});
 const storeCooling = (kind) => (storeCool[kind] || 0) > Date.now();
 function showStoreNotice() {
   const box = $('storeNotice');
@@ -251,6 +289,7 @@ async function storeTab(kind) {
 async function storeCall(kind, fn, args) {
   const cfg = STORES[kind];
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (!storeOn(kind)) return { found: false, off: true, label: cfg.label };
     if (storeCooling(kind)) return { found: false, paused: true, label: cfg.label, error: cfg.label + ' paused (check page)' };
     const tabId = await storeTab(kind);
     // first request after a pause: reload the shop's page in the background so its check can run
@@ -259,6 +298,7 @@ async function storeCall(kind, fn, args) {
       try { await storeReloading[kind]; } finally { setTimeout(() => { storeReloading[kind] = null; }, 20000); }
     } else if (storeReloading[kind]) await storeReloading[kind];
     await storeTurn(kind);
+    if (!storeOn(kind)) return { found: false, off: true, label: cfg.label };      // switched off while waiting
     const res = await exec(tabId, ['core/rules.js', 'core/stores.js'], async (f, argv) => {
       try { return await CSB_STORES[f].apply(null, argv); } catch (e) { return { found: false, error: String(e && e.message || e) }; }
     }, [fn, args]);
@@ -306,7 +346,7 @@ async function lookupPrices(barcode, nameHint) {
   if (priceInFlight.has(key)) { cacheHits++; return priceInFlight.get(key).then((x) => JSON.parse(JSON.stringify(x))); }
   const p = lookupPricesLive(barcode, nameHint).then((res) => {
     // only remember real answers (not blocked pages / errors)
-    const ok = (x) => x && (x.found || (!x.error && !x.blocked && !x.paused));
+    const ok = (x) => x && (x.found || (!x.error && !x.blocked && !x.paused && !x.off));
     if (ok(res.ww) && ok(res.coles)) { priceCache.set(key, { at: Date.now(), ww: res.ww, coles: res.coles, highest: res.highest }); savePriceCache(); }
     return res;
   }).finally(() => priceInFlight.delete(key));
@@ -518,6 +558,7 @@ function downloadFailed(rows, prefix, sheet) {
 
 function storeCell(s) {
   if (!s) return '<span class="muted">—</span>';
+  if (s.off) return '<span class="muted" title="Switched off at the top – tick it to fill this in">off</span>';
   if (s.paused) return '<span class="muted" title="' + esc(s.label || 'This shop') + ' asked for a check – the bot will ask again by itself">waiting – will retry…</span>';
   if (s.error && !s.found) return '<span class="pill bad" title="' + esc(s.error) + '">error</span>';
   if (!s.found) return '<span class="muted">not found</span>';
@@ -531,6 +572,7 @@ function storeCell(s) {
 // 1. ADD NEW ITEMS
 // =====================================================================
 function addStatusPill(r) {
+  if (r.locked) return '<span class="pill idle">sending to PosPort…</span>';
   if (r.pos) {
     if (r.updated === true) return '<span class="pill ok">price updated</span>';
     if (r.updated === false) return '<span class="pill bad" title="' + esc(r.note || '') + '">update failed</span>';
@@ -594,7 +636,7 @@ function rowHTML(r, i) {
       (r.net ? '<span class="sub">name: ' + esc(r.net.source) + '</span>' : '') +
       (r.maybe ? '<div class="maybe">Already in PosPort as <b>' + esc(r.maybe.name) + '</b>' + (r.maybe.price ? ' (' + m(r.maybe.price) + ')' : '') + '?<br>' +
         '<button class="btn small maybe-yes">Yes, same item</button><button class="btn small maybe-no">No, it\'s new</button></div>' : '');
-  return '<tr data-i="' + i + '" class="' + (pos ? 'in-pos' : '') + '">' +
+  return '<tr data-i="' + i + '" class="' + (pos ? 'in-pos' : '') + (r.locked ? ' locked' : '') + '"' + (r.locked ? ' title="Being sent to PosPort – you can edit it again when that is done"' : '') + '>' +
     (pos ? '<td><input type="checkbox" class="apply" title="Save the new price / name to PosPort" ' + (r.apply ? 'checked' : '') + '></td>'
          : '<td><input type="checkbox" class="use" title="Create this item" ' + (r.use !== false ? 'checked' : '') + '></td>') +
     '<td><input type="text" class="bcedit" inputmode="numeric" value="' + esc(r.barcode || '') + '" placeholder="barcode" title="Wrong barcode? Change it here – the row is looked up again">' + (r.copies > 1 ? '<span class="sub">×' + r.copies + ' in this sheet</span>' : '') + ((r.inName || r.hint) ? '<span class="sub">' + esc(r.inName || r.hint) + '</span>' : '') + '</td>' +
@@ -636,6 +678,7 @@ function groupHeadHTML(f) {
     '<button class="btn small fx" data-act="tick"' + (st.flag ? '' : ' disabled') + '>Tick flagged</button>' +
     '<button class="btn small fx" data-act="save"' + (st.save ? '' : ' disabled') + '>Save ' + st.save + ' changes</button>' +
     '<button class="btn small fx" data-act="tickets">Tickets</button>' +
+    '<button class="btn small fx" data-act="savefile" title="Save this file with all prices, names and your edits. Load it again later to carry on.">💾 Save</button>' +
     '<button class="btn small fx" data-act="export">Excel</button>' +
     (f.raw ? '<button class="btn small fx" data-act="cols" title="Choose which column is which">Columns…</button>' : '') +
     '<button class="btn small fx" data-act="remove" title="Remove this file from the list">✕</button>' +
@@ -731,6 +774,7 @@ $('addTable').addEventListener('input', (e) => {
   const tr = e.target.closest('tr[data-i]');
   if (!tr) return;
   const r = state.add[+tr.dataset.i];
+  if (r.locked) { replaceRow(r); log('That row is being sent to PosPort right now – edit it when that is done.', 'err'); return; }
   const c = e.target.classList;
   if (c.contains('posname')) {
     r.newName = e.target.value.trim() && e.target.value.trim() !== r.pos.name ? e.target.value.trim() : null;
@@ -845,6 +889,8 @@ $('addFile').addEventListener('change', async (e) => {
   const anyOpen = state.files.some((f) => f.open);
   let first = true;
   for (const f of files) {
+    const saved = await readSaved(f);
+    if (saved) { restoreSaved(saved, f.name); first = false; continue; }
     const seen = new Set();      // a repeat is only skipped inside the same file – every file shows all its items
     // the same file loaded again replaces its old row (items already created / saved are kept as they are)
     const again = state.files.find((x) => x.name === f.name && !x.invoice);
@@ -894,6 +940,7 @@ async function fileAction(fid, act) {
   if (!f) return;
   const rows = state.add.filter((r) => (r.fileId || 'old') === fid);
   if (act === 'toggle') { f.open = !f.open; renderAdd(); saveState(); return; }
+  if (act === 'savefile') { saveWork([f]); return; }
   if (act === 'remove') {
     if (!confirm('Remove "' + f.name + '" (' + rows.length + ' items) from the list? Nothing in PosPort changes.')) return;
     state.add = state.add.filter((r) => (r.fileId || 'old') !== fid);
@@ -910,7 +957,6 @@ async function fileAction(fid, act) {
     renderAdd(); saveState(); startLookup(); return;
   }
   if (act === 'tick') { rows.forEach((r) => { if (r.pos && r.chk && r.chk.flagged && r.newPrice && r.updated !== true) r.apply = true; }); f.open = true; renderAdd(); saveState(); return; }
-  if (busy && ['create', 'save', 'cols'].includes(act)) { log('Busy with PosPort – try again in a moment.', 'err'); return; }
   if (act === 'create') return runCreate(false, fid);
   if (act === 'save') return runPosUpdates(fid);
   if (act === 'export') return exportItems(rows, f.name.replace(/\.[^.]+$/, ''));
@@ -1067,8 +1113,8 @@ function showCatalogueAge() {
 setInterval(() => { if (state.catalogue.length) showCatalogueAge(); }, 60000);
 
 // Read the PosPort list again and sort every row again (new / in PosPort) – no shop look-ups needed.
-async function recheckPos(quiet) {
-  await scanCatalogue();
+async function recheckPos(quiet, insideJob) {
+  await scanCatalogue(insideJob);
   let moved = 0, newNow = 0;
   state.add.forEach((r) => {
     if (r.status === 'created' || r.status === 'waiting' || r.updated === true) return;
@@ -1086,10 +1132,7 @@ async function recheckPos(quiet) {
   if (!quiet || moved) log('PosPort re-checked: ' + moved + ' items were already in PosPort and moved there, ' + newNow + ' are really new.', 'ok');
   return moved;
 }
-$('addRecheck').addEventListener('click', async () => {
-  setBusy(true);
-  try { await recheckPos(false); } finally { setBusy(false); }
-});
+$('addRecheck').addEventListener('click', () => posJob('re-checking PosPort', () => recheckPos(false, true)));
 
 async function ensureCatalogue() {
   const age = state.catalogueAt ? (Date.now() - state.catalogueAt) / 3600000 : Infinity;
@@ -1134,7 +1177,7 @@ async function startLookup(again) {
       };
       let r = (turn++ % 2 === 0 ? (fromOpen() || fromOthers()) : (fromOthers() || fromOpen())) || state.add.find(waiting);
       // nothing new to look up: fill in shops that were paused earlier (if they are answering again)
-      if (!r) r = state.add.find((x) => x.storePending && x.storePending.length && !x.looking && !caught.has(x) && x.storePending.every((k) => !storeCooling(k)));
+      if (!r) r = state.add.find((x) => x.storePending && x.storePending.length && !x.looking && !caught.has(x) && x.storePending.some((k) => !storeCooling(k) && storeOn(k)));
       if (r) { if (!waiting(r)) { caught.add(r); r.catchUp = true; } tried.add(r); r.looking = true; r.relook = false; }
       return r;
     };
@@ -1182,11 +1225,12 @@ function changeBarcode(r, value) {
 async function storeCatchUp(r) {
   const name = (r.ww && r.ww.found && r.ww.name) || (r.coles && r.coles.found && r.coles.name) || r.inName || r.hint || r.name || '';
   for (const k of (r.storePending || []).slice()) {
+    if (!storeOn(k) || storeCooling(k)) continue;           // still off / paused: stays pending
     const fn = k === 'ww' ? 'wwLookup' : 'colesLookup';
     let x = await storeCall(k, fn, [r.barcode, name]);
-    if (x && x.paused) return false;
+    if (x && (x.paused || x.off)) continue;
     if (!(x && x.found) && name && r.barcode) x = await storeCall(k, fn, ['', name]);
-    if (x && x.paused) return false;
+    if (x && (x.paused || x.off)) continue;
     r[k] = x;
     r.storePending = r.storePending.filter((z) => z !== k);
   }
@@ -1212,7 +1256,7 @@ async function lookupOne(r) {
     }
   }
   r.ww = res.ww; r.coles = res.coles; r.highest = res.highest;
-  r.storePending = ['ww', 'coles'].filter((k) => res[k] && res[k].paused);      // that shop was paused: ask it again later
+  r.storePending = ['ww', 'coles'].filter((k) => res[k] && (res[k].paused || res[k].off));      // that shop was paused or off: ask it later
   const src = res.ww && res.ww.found ? res.ww : (res.coles && res.coles.found ? res.coles : null);
   // a line from a Woolworths / Coles invoice has no barcode: take it from the shop's product
   if (!r.barcode && src && src.barcode && strongMatch(src)) { r.barcode = R.cleanBarcode(src.barcode); r.barcodeFrom = src === res.ww ? 'Woolworths' : 'Coles'; }
@@ -1352,7 +1396,11 @@ async function runPosUpdates(fid) {
   const line = (r) => (r.newName && r.newName !== r.pos.name ? r.pos.name + ' → "' + r.newName + '"' : r.pos.name) +
     (r.newPrice > 0 && r.newPrice !== r.pos.price ? ': ' + m(r.pos.price) + ' → ' + m(r.newPrice) : '');
   if (!confirm('Save ' + todo.length + ' changes in PosPort?\n\n' + todo.slice(0, 15).map(line).join('\n') + (todo.length > 15 ? '\n…' : ''))) return;
-  setBusy(true);
+  todo.forEach((r) => { r.locked = true; });
+  keepScroll(() => renderAdd()); saveState();          // show the locked rows straight away
+  return posJob('saving ' + todo.length + ' change' + (todo.length > 1 ? 's' : ''), () => runPosUpdatesNow(todo, line));
+}
+async function runPosUpdatesNow(todo, line) {
   const done = [];
   try {
     for (const r of todo) {
@@ -1382,6 +1430,7 @@ async function runPosUpdates(fid) {
         done.push({ full: r.pos.name, name: r.tname || ticketNameOf(r.pos.name, ''), price: r.pos.price, barcode: r.barcode });
       }
       log(r.pos.name + ': ' + (r.updated ? (res.checked ? 'saved and checked in PosPort' : 'saved, but could not double-check – please look in PosPort') : 'FAILED – ' + r.note), r.updated ? 'ok' : 'err');
+      r.locked = false;
       refreshRow(r); saveState();
       if (!r.updated) {
         const go = await pause('Could not save "' + r.pos.name + '": ' + r.note + '. Continue with the next item?');
@@ -1389,7 +1438,7 @@ async function runPosUpdates(fid) {
       }
       await sleep(S.delayMs);
     }
-  } finally { setBusy(false); renderAdd(); toPrintList(done, 'changed items'); }
+  } finally { todo.forEach((r) => { r.locked = false; }); safeRenderAdd(); toPrintList(done, 'changed items'); }
 }
 
 $('addCreate').addEventListener('click', () => runCreate(false));
@@ -1409,17 +1458,7 @@ async function runCreate(retry, fid) {
     const redo = state.add.filter((r) => inFile(r) && (r.status === 'error' || r.status === 'filled'));
     if (!redo.length) { log('Nothing to retry.', 'err'); return; }
     redo.forEach((r) => { r.status = r.name && r.price > 0 && r.category ? 'ready' : 'not found'; r.note = 'retry'; r.use = true; });
-    renderAdd(); saveState();
-    setBusy(true);
-    try { if (await posTabOnBulk()) await discardBulk(); } finally { setBusy(false); }
-  }
-  // never make duplicates: if the PosPort list is more than an hour old, read it again first
-  if (!retry && state.catalogue.length && (Date.now() - (state.catalogueAt || 0)) > 3600000) {
-    log('Your PosPort list is more than an hour old – reading it again first so nothing is created twice…');
-    setBusy(true);
-    let moved = 0;
-    try { moved = await recheckPos(true); } finally { setBusy(false); }
-    if (moved && !confirm(moved + ' of these items are already in PosPort (added since the bot last looked) and were moved to "Already in PosPort". Create the rest now?')) return;
+    safeRenderAdd(); saveState();
   }
   const sameItem = (r) => r.barcode ? 'b:' + R.cleanBarcode(r.barcode).replace(/^0+/, '') : 'n:' + nameKey(r.name);
   const doneKeys = new Set(state.add.filter((r) => r.status === 'created' || r.status === 'filled').map(sameItem));
@@ -1434,8 +1473,23 @@ async function runCreate(retry, fid) {
   if (!todo.length) { log('Nothing ready to create (need name, price and category).', 'err'); return; }
   const long = todo.filter((r) => r.name.length > S.nameMaxLength).length;
   if (!confirm((retry ? 'Retry: create ' : 'Create ') + todo.length + ' items in PosPort?' + (skipped ? '\n' + skipped + ' ticked rows are missing a name/price/category and will be skipped.' : '') + (long ? '\n' + long + ' names are longer than ' + S.nameMaxLength + ' characters.' : ''))) return;
-  setBusy(true);
+  todo.forEach((r) => { r.locked = true; });
+  keepScroll(() => renderAdd()); saveState();          // show the locked rows straight away
+  return posJob((retry ? 'retrying ' : 'creating ') + todo.length + ' new item' + (todo.length > 1 ? 's' : ''), () => runCreateNow(todo, retry, sameItem));
+}
+async function runCreateNow(todo, retry, sameItem) {
   try {
+    if (retry && await posTabOnBulk()) await discardBulk();
+    // never make duplicates: if the PosPort list is more than an hour old, read it again first
+    if (!retry && state.catalogue.length && (Date.now() - (state.catalogueAt || 0)) > 3600000) {
+      log('Your PosPort list is more than an hour old – reading it again first so nothing is created twice…');
+      const moved = await recheckPos(true, true);
+      if (moved) {
+        todo.filter((r) => r.pos).forEach((r) => { r.locked = false; });
+        todo = todo.filter((r) => !r.pos);
+        log(moved + ' items were already in PosPort (added since the bot last looked) – moved to "Already in PosPort", not created.', 'ok');
+      }
+    }
     let start = 0, attempts = 0;
     while (start < todo.length && !stopRequested) {
       const batch = todo.slice(start, start + S.batchSize).filter((it) => it.status !== 'skipped');
@@ -1453,7 +1507,7 @@ async function runCreate(retry, fid) {
         const res = await pos('fillBulkRow', i, { name: it.name, barcode: it.barcode, price: it.price, category: it.category }, S.delayMs);
         if (!res || !res.ok) { it.status = 'error'; it.note = res && res.error; bad = it; log('Row ' + (i + 1) + ' (' + it.name + '): ' + (res && res.error), 'err'); break; }
         it.status = 'filled';
-        renderAdd();
+        safeRenderAdd();
         await sleep(S.delayMs / 2);
       }
       const resetBatch = () => batch.forEach((it) => { if (it.status === 'filled' || it.status === 'error') it.status = 'ready'; });
@@ -1466,7 +1520,7 @@ async function runCreate(retry, fid) {
         resetBatch();
         if (ans.startsWith('Skip')) { bad.status = 'skipped'; bad.use = false; bad.note = 'skipped after a failed fill'; }
         if (++attempts >= 3 && ans.startsWith('Retry')) { await problem('Still failing after 3 tries – stopping. Check the item, then use "Retry unfinished".'); if (bad) bad.status = 'error'; break; }
-        renderAdd(); saveState();
+        safeRenderAdd(); saveState();
         continue;                                   // same batch again
       }
 
@@ -1488,7 +1542,7 @@ async function runCreate(retry, fid) {
       }
       if (!created) {
         if (++attempts >= 3) { await problem('Creating failed 3 times – stopping. Use "Retry unfinished" later.'); batch.forEach((it) => { it.status = 'error'; }); break; }
-        await discardBulk(); resetBatch(); renderAdd(); saveState();
+        await discardBulk(); resetBatch(); safeRenderAdd(); saveState();
         continue;
       }
       const made = batch.filter((it) => it.status === 'filled');
@@ -1500,11 +1554,11 @@ async function runCreate(retry, fid) {
         state.catalogue.push(...made.map((it) => ({ name: it.name, price: it.price, barcode: it.barcode })));
         toPrintList(made.map((it) => ({ full: it.name, name: it.tname || ticketNameOf(it.name, ''), price: it.price, barcode: it.barcode })), 'new items');
       }
-      renderAdd(); saveState();
+      safeRenderAdd(); saveState();
       start += S.batchSize; attempts = 0;
     }
     log('Create run finished. Download the comparison Excel to keep a record.', 'ok');
-  } finally { setBusy(false); renderAdd(); saveState(); }
+  } finally { todo.forEach((r) => { r.locked = false; }); safeRenderAdd(); saveState(); }
 }
 
 async function posTabOnBulk() {
@@ -1513,6 +1567,120 @@ async function posTabOnBulk() {
 }
 
 $('addExport').addEventListener('click', () => exportItems(state.add, 'items-and-prices'));
+
+// =====================================================================
+// SAVE / CARRY ON LATER
+// An Excel file: one readable sheet per file (Item Name · Barcode · Price · Category first, ready for PosPort),
+// plus a hidden "_bot" sheet with everything the bot knows, so loading it again restores the work exactly –
+// also in a newer version of the bot. A recent save re-uses its Woolworths/Coles prices: no new look-ups.
+// =====================================================================
+const SAVE_MARK = 'CSB-SAVE v1';
+const TRANSIENT = ['looking', 'locked', 'catchUp', 'relook', 'tried'];
+function saveStamp() {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+function readableRow(r) {
+  const pos = r.pos;
+  const price = pos ? (r.newPrice || pos.price) : r.price;
+  return {
+    'Item Name': pos ? (r.newName || pos.name) : (r.name || ''), Barcode: r.barcode || '', Price: price || '', Category: r.category || (pos && pos.category) || '',
+    'Ticket name': r.tname || '', 'In PosPort': pos ? 'yes' : (r.status === 'created' ? 'created' : 'no'),
+    'PosPort name': pos ? pos.name : '', 'PosPort price': pos ? pos.price : '',
+    'Change $': pos && r.newPrice && r.newPrice !== pos.price ? R.round2(r.newPrice - pos.price) : '',
+    'Woolworths $': r.ww && r.ww.found ? r.ww.regular : '', 'Woolworths special $': r.ww && r.ww.found && r.ww.onSpecial ? r.ww.now : '',
+    'Woolworths product': r.ww && r.ww.found ? r.ww.name : '',
+    'Coles $': r.coles && r.coles.found ? r.coles.regular : '', 'Coles special $': r.coles && r.coles.found && r.coles.onSpecial ? r.coles.now : '',
+    'Coles product': r.coles && r.coles.found ? r.coles.name : '',
+    'Highest $': r.highest || '', 'Invoice cost $': r.inv && r.inv.unitCost ? R.round2(r.inv.unitCost) : '',
+    Status: r.locked ? 'sending' : (r.updated === true ? 'saved in PosPort' : r.status || ''), Note: r.note || '',
+  };
+}
+function saveWork(files) {
+  files = files.filter(Boolean);
+  if (!files.length) { log('Nothing to save – load a file first.', 'err'); return; }
+  const wb = XLSX.utils.book_new();
+  const used = new Set();
+  const sheetName = (n) => {
+    let b = String(n).replace(/[\\/?*[\]:]/g, ' ').replace(/\.(xlsx?|csv|pdf)$/i, '').slice(0, 28).trim() || 'Items';
+    let s = b, k = 2; while (used.has(s.toLowerCase()) || s === '_bot') s = b.slice(0, 26) + ' ' + k++;
+    used.add(s.toLowerCase()); return s;
+  };
+  const data = { mark: SAVE_MARK, savedAt: Date.now(), version: chrome.runtime.getManifest().version, files: [], rows: [] };
+  files.forEach((f, fi) => {
+    const rows = state.add.filter((r) => (r.fileId || 'old') === f.id);
+    const ws = XLSX.utils.json_to_sheet(rows.length ? rows.map(readableRow) : [readableRow({})]);
+    ws['!cols'] = [38, 15, 9, 18, 26, 9, 34, 10, 9, 11, 11, 34, 9, 9, 34, 10, 11, 14, 40].map((w) => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, ws, sheetName(f.name));
+    data.files.push({ name: f.name, invoice: f.invoice || null, repeats: f.repeats || [], picks: f.picks || null, raw: f.raw && f.raw.length <= 3000 ? f.raw : null });
+    rows.forEach((r) => {
+      const c = Object.assign({}, r, { fileIdx: fi });
+      TRANSIENT.forEach((k) => delete c[k]);
+      delete c.fileId;
+      data.rows.push(c);
+    });
+  });
+  // hidden sheet with the bot's own copy (Excel cells hold at most 32,767 characters, so it is split)
+  const json = JSON.stringify(data);
+  const chunks = [[SAVE_MARK]];
+  for (let i = 0; i < json.length; i += 30000) chunks.push([json.slice(i, i + 30000)]);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(chunks), '_bot');
+  wb.Workbook = { Sheets: wb.SheetNames.map((n) => ({ Hidden: n === '_bot' ? 1 : 0 })) };
+  const base = files.length === 1 ? String(files[0].name).replace(/\.(xlsx?|csv|pdf)$/i, '') : 'bot-work';
+  XLSX.writeFile(wb, base.replace(/[^\w .#&-]+/g, '_') + '-saved-' + saveStamp() + '.xlsx');
+  files.forEach((f) => { f.savedAt = data.savedAt; });
+  saveState(); safeRenderAdd();
+  log('Saved ' + data.rows.length + ' items from ' + files.length + ' file' + (files.length > 1 ? 's' : '') + ' (check your Downloads). Load that Excel again later to carry on where you were.', 'ok');
+}
+$('addSaveAll').addEventListener('click', () => saveWork(state.files || []));
+
+// A saved file? Returns the bot's copy, or null for an ordinary Excel.
+async function readSaved(file) {
+  if (!/\.xlsx$/i.test(file.name)) return null;
+  try {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    if (!wb.SheetNames.includes('_bot')) return null;
+    const cells = XLSX.utils.sheet_to_json(wb.Sheets._bot, { header: 1, raw: true, defval: '' }).map((r) => String(r[0] || ''));
+    if (cells[0] !== SAVE_MARK) return null;
+    const data = JSON.parse(cells.slice(1).join(''));
+    return data && data.mark === SAVE_MARK ? data : null;
+  } catch (e) { log(file.name + ': could not read the saved data (' + e.message + ') – reading it as a normal sheet.', 'err'); return null; }
+}
+function restoreSaved(data, fileName) {
+  ensureFiles();
+  const ageH = (Date.now() - (data.savedAt || 0)) / 3600000;
+  const fresh = ageH < (S.reuseHours === undefined ? 24 : S.reuseHours);
+  const anyOpen = state.files.some((f) => f.open);
+  let nRows = 0;
+  data.files.forEach((sf, fi) => {
+    // the same file already in the list: the saved copy replaces it (items created / saved in PosPort are kept)
+    const again = state.files.find((x) => x.name === sf.name);
+    if (again) {
+      state.add = state.add.filter((r) => (r.fileId || 'old') !== again.id || r.status === 'created' || r.updated === true);
+      if (!state.add.some((r) => (r.fileId || 'old') === again.id)) state.files = state.files.filter((x) => x !== again);
+    }
+    const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    state.files.push({ id, name: sf.name, invoice: sf.invoice || undefined, repeats: sf.repeats || [], picks: sf.picks || undefined, raw: sf.raw || undefined,
+      open: !anyOpen && fi === 0, savedAt: data.savedAt });
+    data.rows.filter((r) => r.fileIdx === fi).forEach((saved) => {
+      const r = Object.assign({}, saved, { fileId: id });
+      delete r.fileIdx;
+      if (!fresh && r.status !== 'created' && r.updated !== true) {
+        // old prices: look them up again, keep everything you typed
+        if (r.pos && r.apply && r.newPrice) { r.overridePrice = r.newPrice; r.sheetPrice = true; }
+        r.status = 'waiting'; r.pos = null; r.maybe = null; r.chk = null;
+      } else if (fresh && (r.ww || r.coles)) {
+        // share the saved prices with other files too
+        const key = priceKey(r.barcode, r.inName || r.hint);
+        if (key !== 'n:' && !priceCache.has(key)) priceCache.set(key, { at: data.savedAt, ww: r.ww, coles: r.coles, highest: r.highest });
+      }
+      state.add.push(r); nRows++;
+    });
+  });
+  const age = ageH < 1 ? Math.round(ageH * 60) + ' min' : ageH < 48 ? Math.round(ageH) + ' h' : Math.round(ageH / 24) + ' days';
+  log('Carried on from ' + fileName + ': ' + data.files.length + ' file' + (data.files.length > 1 ? 's' : '') + ', ' + nRows + ' items, saved ' + age + ' ago' +
+    (fresh ? ' – using its Woolworths/Coles prices (no new look-ups).' : ' – older than ' + S.reuseHours + ' h, so prices are looked up again (your edits are kept).'), 'ok');
+}
 function exportItems(list, base) {
   const fname = (r) => ((state.files || []).find((f) => f.id === (r.fileId || 'old')) || {}).name || '';
   const rows = list.map((r) => ({
@@ -1588,12 +1756,13 @@ function catalogueIndex() {
   return byName;
 }
 
-$('chkScan').addEventListener('click', async () => {
-  setBusy(true);
-  try { await scanCatalogue(); } finally { setBusy(false); }
-});
+$('chkScan').addEventListener('click', () => scanCatalogue());
 
-async function scanCatalogue() {
+// Reading the PosPort list uses the PosPort tab, so it takes its turn with Create / Save jobs.
+function scanCatalogue(insideJob) {
+  return insideJob ? scanCatalogueNow() : posJob('reading the PosPort item list', scanCatalogueNow);
+}
+async function scanCatalogueNow() {
   {
     if (!(await posGo('/catalog/items', 'items'))) { log('Items page did not open.', 'err'); return; }
     const seen = new Map();
@@ -1788,7 +1957,8 @@ $('chkFailed').addEventListener('click', () => {
   downloadFailed(rows, 'price-check-failed', 'Failed');
 });
 
-$('chkApply').addEventListener('click', async () => {
+$('chkApply').addEventListener('click', () => posJob('changing prices', chkApplyNow));
+async function chkApplyNow() {
   const todo = state.check.filter((r) => r.apply && r.posName && r.newPrice > 0);
   if (!todo.length) { log('Tick the rows to update and give them a new price.', 'err'); return; }
   if (!confirm('Change the price of ' + todo.length + ' items in PosPort?\n\n' + todo.slice(0, 15).map((r) => r.posName + ': ' + m(r.ours) + ' → ' + m(r.newPrice)).join('\n') + (todo.length > 15 ? '\n…' : ''))) return;
@@ -1811,7 +1981,7 @@ $('chkApply').addEventListener('click', async () => {
       await sleep(S.delayMs);
     }
   } finally { setBusy(false); toPrintList(chkDone, 'changed prices'); }
-});
+}
 
 // =====================================================================
 // 3. LABELS
@@ -1972,7 +2142,8 @@ async function tickProduct(product) {
   return { candidates, ok: false, missing: true, error: 'no item like "' + product + '" in PosPort', words: R.searchWords(product).join(', ') };
 }
 
-$('lblRun').addEventListener('click', async () => {
+$('lblRun').addEventListener('click', () => posJob('ticking labels', lblRunNow));
+async function lblRunNow() {
   const names = $('lblNames').value.split('\n').map((s) => s.trim()).filter(Boolean);
   if (!names.length) return;
   $('lblLog').innerHTML = '';
@@ -2007,7 +2178,7 @@ $('lblRun').addEventListener('click', async () => {
     }
     if (!state.catalogue.length && wanted.filter((w) => isBarcode(w.name) || w.name.split(' ').length < 3).length >= 5 &&
         confirm('Faster and more accurate: read all PosPort item names first (takes about a minute)?')) {
-      await scanCatalogue();
+      await scanCatalogue(true);
     }
     if (!(await posGo('/catalog/items', 'items'))) { lblLog('Items page did not open.', 'err'); return; }
     let ticked = 0;
@@ -2050,7 +2221,7 @@ $('lblRun').addEventListener('click', async () => {
     await chrome.tabs.update(tabId, { active: true });
     lblLog(p && p.ok ? 'Pressed Print labels (' + ticked + ' items). Choose the label stock and press Print.' : 'Ticked ' + ticked + ' items but: ' + (p && p.error), p && p.ok ? 'ok' : 'err');
   } finally { setBusy(false); }
-});
+}
 
 
 // =====================================================================
@@ -2201,10 +2372,7 @@ $('tkAddCat').addEventListener('click', () => {
   addTickets(items.map((c) => ({ full: c.name, name: ticketNameOf(c.name, ''), price: c.price, barcode: c.barcode || '' })));
   log(cat + ': ' + items.length + ' items on the print list, PosPort prices' + (age !== null ? ' from ' + (age < 1 ? 'less than an hour' : age + ' hours') + ' ago' : '') + (age > 12 ? ' – press ↻ first if prices changed' : '') + '.', age > 12 ? 'err' : 'ok');
 });
-$('tkCatRefresh').addEventListener('click', async () => {
-  setBusy(true);
-  try { await scanCatalogue(); } finally { setBusy(false); fillTicketCategories(); }
-});
+$('tkCatRefresh').addEventListener('click', () => scanCatalogue().finally(fillTicketCategories));
 
 function renderTickets() {
   fillTicketCategories();
@@ -2783,7 +2951,7 @@ $('bkItems').addEventListener('click', () => runBackup(true));
 // =====================================================================
 // SETTINGS
 // =====================================================================
-const NUM_KEYS = ['markup', 'markupPct', 'storeGapMs', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel', 'fallbackMargin', 'minMargin'];
+const NUM_KEYS = ['markup', 'markupPct', 'reuseHours', 'storeGapMs', 'flagLow', 'flagHigh', 'nameMaxLength', 'ticketNameMax', 'delayMs', 'batchSize', 'parallel', 'fallbackMargin', 'minMargin'];
 function fillSettings() {
   NUM_KEYS.forEach((k) => { $('s_' + k).value = S[k]; });
   $('s_extraBlankRow').checked = !!S.extraBlankRow;
@@ -2796,6 +2964,7 @@ function fillSettings() {
   $('addMarkup').value = Number(S.markup).toFixed(2);
   $('addMarkupPct').value = S.markupPct || 0;
   $('addBasis').value = S.priceBasis || 'shops';
+  $('useWW').checked = S.useWW !== false; $('useColes').checked = S.useColes !== false;
   $('addInvMargin').value = S.fallbackMargin || 40;
   R.setAbbreviations(S.abbrevs || '');
   document.querySelectorAll('.lowLbl').forEach((x) => { x.textContent = m(S.flagLow); });
@@ -2867,6 +3036,7 @@ function refreshButtons() {
   loadTkOpts(); renderTickets(); renderBuy(); renderInvoices();
   log('Ready. Keep PosPort Back Office logged in, in this Chrome window.');
   // carry on with items that were still waiting when the bot was closed or reloaded
+  state.add.forEach((r) => { r.locked = false; });     // a PosPort job that was cut off by closing the bot
   const left = state.add.filter((r) => r.status === 'waiting' || r.looking).length;
   if (left) { state.add.forEach((r) => { if (r.looking) { r.looking = false; r.status = 'waiting'; } }); log('Carrying on: ' + left + ' items still to look up.'); startLookup(); }
 })();

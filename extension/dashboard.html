@@ -17,9 +17,15 @@
       <button class="tab" data-tab="backup" role="tab">Backup</button>
       <button class="tab" data-tab="settings" role="tab">Settings</button>
     </nav>
+    <div class="shops" title="Untick a shop to skip it and go faster. Tick it again and the bot fills in what it skipped.">
+      <span class="muted">Ask:</span>
+      <label><input type="checkbox" id="useWW"> Woolworths</label>
+      <label><input type="checkbox" id="useColes"> Coles</label>
+    </div>
   </header>
 
   <div id="storeNotice" class="banner store-notice hidden"></div>
+  <div id="posJobs" class="banner hidden"></div>
   <div id="banner" class="banner hidden">
     <span id="bannerText"></span>
     <button id="bannerContinue" class="btn primary small">Continue</button>
@@ -85,6 +91,7 @@
         </div>
         <span id="addSummary" class="muted"></span>
         <span class="spacer"></span>
+        <button id="addSaveAll" class="btn small primary-outline" title="Save all files with everything the bot knows (prices, names, edits) as one Excel. Load it again later – even in a new version of the bot – to carry on where you were.">💾 Save all</button>
         <button id="addExport" class="btn small" disabled>Download Excel</button>
         <button id="addFailed" class="btn small" disabled>Download failed items</button>
         <button id="addToTickets" class="btn small" disabled>Make tickets</button>
@@ -282,6 +289,7 @@
           <textarea id="s_abbrevs" rows="4" placeholder="Classic=CLS&#10;Special=SPL&#10;Chocolate=CHOC"></textarea></label>
         <label>Pause between actions (ms)<input type="number" id="s_delayMs"></label>
         <label>Items looked up at the same time (1–6)<input type="number" id="s_parallel" min="1" max="6"></label>
+        <label>Loading a saved file: re-use its Woolworths/Coles prices if it is younger than (hours)<input type="number" step="1" min="0" id="s_reuseHours"></label>
         <label>Gap between requests to the same shop (ms) – bigger = gentler on Woolworths/Coles<input type="number" step="100" min="300" id="s_storeGapMs"></label>
         <label>Margin on invoice cost (%) – used for "cost + margin" prices and when an item isn't at Woolworths/Coles<input type="number" id="s_fallbackMargin"></label>
         <label>Show cost in red below margin (%)<input type="number" id="s_minMargin"></label>

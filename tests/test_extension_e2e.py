@@ -24,6 +24,7 @@ COLES = {"pageProps": {"searchResults": {"results": [{
 
 
 BLOCK = {"coles": False}
+CALLS = {"ww": 0}
 VITASOY = {"Products": [{"Products": [{
     "Stockcode": 789, "Name": "Vitasoy Oat Milky Long Life Milk Uht", "DisplayName": "Vitasoy Oat Milky Long Life Milk Uht 1l",
     "PackageSize": "1l", "Barcode": "9310320000000", "Price": 2.5, "WasPrice": 3.0, "IsOnSpecial": True,
@@ -37,6 +38,7 @@ KITKAT = {"Products": [{"Products": [{
 def ww_answer(route):
     """Kit Kat (not in the mock PosPort) for its barcode, Minties (in PosPort) for anything else."""
     body = route.request.post_data or route.request.url
+    CALLS["ww"] += 1
     if "Vitasoy" in body or "vitasoy" in body:
         return route.fulfill(json=VITASOY)
     route.fulfill(json=KITKAT if "9300605094703" in body or "Kit Kat" in body else WW)
@@ -321,6 +323,17 @@ def main():
         wait_until(page, lambda: "$4.50" in page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682077777']")).first.inner_text(), 60000)
         print("coles filled in later:", " ".join(row.inner_text().split())[:140])
 
+        # Coles switched off at the top: skipped at once ("off"), filled in when switched back on
+        page.uncheck("#useColes")
+        page.evaluate("document.getElementById('log').textContent = ''")
+        page.fill("#addScan", "9300682066666"); page.press("#addScan", "Enter")
+        wait_until(page, lambda: "Done:" in page.inner_text("#log"), 60000)
+        r6 = lambda: page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682066666']")).first.inner_text()
+        assert "off" in r6() and "$4.20" in r6(), r6()
+        page.check("#useColes")
+        wait_until(page, lambda: "$4.50" in r6(), 60000)
+        print("coles off/on:", " ".join(r6().split())[:120])
+
         # Several files at once: every file moves forward together (not one file after the other)
         page.click("[data-tab=add]")
         many = []
@@ -366,10 +379,33 @@ def main():
         page.set_input_files("#addFile", str(pp))
         wait_until(page, lambda: any("shelf.xlsx" in h and "looked up" in h for h in page.locator("#addTable tr.fhead").all_inner_texts()), 120000)
         hd = page.locator("#addTable tr.fhead").filter(has_text="shelf.xlsx").first
-        if "▸" in hd.inner_text(): hd.click()
+        if "▸" in hd.inner_text(): hd.locator("button.tog").click()
         vals = page.locator("#addTable tr.in-pos input.newprice").evaluate_all("els => els.map(e => [e.value, e.closest('tr').querySelector('input.apply').checked, e.closest('td').innerText])")
         print("shelf sheet prices:", vals)
         assert any(v[0] == "5.95" and v[1] and "from your sheet" in v[2] for v in vals), vals
+
+        # Save a file, remove it, load the save again: everything comes back, no new shop look-ups
+        hd = page.locator("#addTable tr.fhead").filter(has_text="shelf.xlsx").first
+        with page.expect_download() as dl:
+            hd.locator("button[data-act=savefile]").click()
+        saved = pathlib.Path(tempfile.mkdtemp()) / dl.value.suggested_filename
+        dl.value.save_as(saved)
+        wbs = load_workbook(saved)
+        print("saved file:", saved.name, wbs.sheetnames, [c.value for c in wbs[wbs.sheetnames[0]][1]][:5])
+        assert wbs.sheetnames[-1] == "_bot" and wbs["_bot"].sheet_state == "hidden"
+        assert [c.value for c in wbs[wbs.sheetnames[0]][1]][:4] == ["Item Name", "Barcode", "Price", "Category"]
+        before = page.locator("#addTable tr.fhead").filter(has_text="shelf.xlsx").first.inner_text()
+        page.locator("#addTable tr.fhead").filter(has_text="shelf.xlsx").first.locator("button[data-act=remove]").click()
+        wait_until(page, lambda: page.locator("#addTable tr.fhead").filter(has_text="shelf.xlsx").count() == 0)
+        calls0 = CALLS["ww"]
+        page.set_input_files("#addFile", str(saved))
+        wait_until(page, lambda: "Carried on from" in page.inner_text("#log"))
+        page.wait_for_timeout(2500)
+        after = page.locator("#addTable tr.fhead").filter(has_text="shelf.xlsx").first.inner_text()
+        print("restored:", " ".join(after.split())[:90], "| Woolworths calls during restore:", CALLS["ww"] - calls0)
+        assert "no new look-ups" in page.inner_text("#log") and CALLS["ww"] == calls0
+        stats = lambda t: " ".join(t.split()).split("shelf.xlsx", 1)[1].split("Create")[0]
+        assert stats(before) == stats(after) and "Columns" in after, (before, after)
 
         # Tickets for a whole category (from the PosPort item list)
         page.click("[data-tab=tickets]")
@@ -429,14 +465,20 @@ def main():
         # Rename + new price for an item already in PosPort: opens the item, saves, then re-opens it to check
         page.click("[data-tab=add]")
         page.click("#addFilter button[data-f=pos]")
-        page.locator("#addTable tr.fhead").filter(has_text="barcodes.xlsx").first.click()     # open that file again
+        page.locator("#addTable tr.fhead").filter(has_text="barcodes.xlsx").first.locator("button.tog").click()     # open that file again
         row = page.locator("#addTable tr.in-pos").filter(has=page.locator("input.bcedit[value='9300682012345']")).first
         row.locator("input.posname").fill("Allens Minties Bag 150g")
         row.locator("input.newprice").fill("6.20")
         row.locator("input.newprice").blur()
         page.evaluate("document.getElementById('log').textContent = ''")
         page.click("#addUpdate")
+        wait_until(page, lambda: not page.locator("#posJobs").is_hidden(), 15000)
+        print("job bar:", " ".join(page.inner_text("#posJobs").split())[:100])
+        other = page.locator("#addTable tr[data-i]:not(.locked) input.tname").first      # another row can still be edited
+        other.fill("EDITED WHILE SAVING"); other.blur()
         wait_until(page, lambda: "saved" in page.inner_text("#log") or "FAILED" in page.inner_text("#log") or not page.locator("#banner.hidden").count())
+        page.wait_for_timeout(3000)
+        assert page.locator("#addTable input.tname").evaluate_all("els => els.some(e => e.value === 'EDITED WHILE SAVING')")
         print("rename log:", page.inner_text("#log").replace("\n", " | ")[-400:])
         pos = [pg for pg in ctx.pages if "posport" in pg.url][0]
         kept = pos.evaluate("localStorage.getItem('mockItems')")
