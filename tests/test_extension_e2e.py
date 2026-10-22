@@ -341,7 +341,7 @@ def main():
         page.fill("#addScan", "9300682055555"); page.press("#addScan", "Enter")
         wait_until(page, lambda: "Done:" in page.inner_text("#log"), 60000)
         r5 = lambda: page.locator("#addTable tr[data-i]").filter(has=page.locator("input.bcedit[value='9300682055555']")).first.inner_text()
-        assert "off" in r5() and "$4.20" in r5(), r5()
+        wait_until(page, lambda: "off" in r5() and "$4.20" in r5(), 60000)
         page.locator("#addTable tr.fhead").filter(has_text="Scanned barcodes").first.locator(".fshop input[data-shop=coles]").check()
         wait_until(page, lambda: "$4.50" in r5(), 60000)
         print("file switch:", " ".join(r5().split())[:100])
