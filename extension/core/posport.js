@@ -408,8 +408,11 @@
     const disabled = next.disabled || next.getAttribute('aria-disabled') === 'true' || /disabled/.test(next.className);
     if (disabled) return { ok: false, last: true };
     const before = JSON.stringify(listRows().map((r) => r.name));
-    realClick(next);
-    const changed = await waitFor(() => JSON.stringify(listRows().map((r) => r.name)) !== before, 8000);
+    // PosPort's page buttons ignore the bot's full pointer + mouse click, but a plain click works
+    next.scrollIntoView({ block: 'center' });
+    next.click();
+    let changed = await waitFor(() => JSON.stringify(listRows().map((r) => r.name)) !== before, 8000);
+    if (!changed) { realClick(next); changed = await waitFor(() => JSON.stringify(listRows().map((r) => r.name)) !== before, 4000); }
     await sleep(delay || 300);
     // the Next button is still there and enabled but the page did not change: slow, not the last page
     return { ok: !!changed, last: false, slow: !changed };
