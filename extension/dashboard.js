@@ -613,6 +613,7 @@ function addStatusPill(r) {
   if (r.pos) {
     if (r.updated === true) return '<span class="pill ok">price updated</span>';
     if (r.updated === false) return '<span class="pill bad" title="' + esc(r.note || '') + '">update failed</span>';
+    if (r.wrongItem) return '<span class="pill bad" title="' + esc(r.note || '') + '">in PosPort as a different product?</span><span class="sub why-new">PosPort: ' + esc(r.wrongItem) + '</span>';
     return '<span class="pill idle">in PosPort</span>';
   }
   if (r.looking) return '<span class="pill idle">looking up…</span>';
@@ -623,7 +624,7 @@ function addStatusPill(r) {
 }
 const alsoInHTML = (r) => (r.alsoIn ? '<span class="sub also-in" title="' + esc(r.alsoIn.join('\n')) + '">also on ' + r.alsoIn.length + ' other file' + (r.alsoIn.length > 1 ? 's' : '') + ' – created once</span>' : '');
 
-const needsAttention = (r) => ['not found', 'error', 'check', 'filled'].includes(r.status) || !!r.maybe || r.updated === false ||
+const needsAttention = (r) => ['not found', 'error', 'check', 'filled'].includes(r.status) || !!r.maybe || !!r.wrongItem || r.updated === false ||
   (r.pos && r.chk && r.chk.flagged && r.updated !== true);
 const inFilter = (r) => {
   const f = state.addFilter || 'all';
@@ -1245,11 +1246,16 @@ function markInPos(r, item) {
   if (!r.tnameEdited) r.tname = ticketNameOf(item.name, '');
 }
 
+// the row's own names (invoice / sheet / shop) all look like a different product than the PosPort item
+function rowNamesDiffer(r, posName) {
+  const own = [r.inName, r.hint, r.ww && r.ww.found && r.ww.match === 'barcode' ? r.ww.name : '', r.coles && r.coles.found && r.coles.match === 'barcode' ? r.coles.name : ''].filter(Boolean);
+  return own.length > 0 && !own.some((n) => R.relatedNames(n, posName));
+}
 function findInPos(r) {
   if (!state.catalogue.length) return { item: null };
   if (r.barcode) {
     const b = posByBarcode(r.barcode);
-    if (b) return { item: b, how: 'barcode' };
+    if (b) return { item: b, how: 'barcode', differs: rowNamesDiffer(r, b.name) };
   }
   // Trust supermarket names that were matched by barcode; a name-only match is used only if nothing better
   const names = [];
@@ -1362,7 +1368,7 @@ async function recheckPos(quiet, insideJob) {
     }
     if (r.notInPos) return;    // you said "No, it's new"
     const found = findInPos(r);
-    if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how + ' (re-check)'; if (found.exact) r.yesSame = true; moved++; }
+    if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how + ' (re-check)'; if (found.exact) r.yesSame = true; moved++;  r.wrongItem = found.differs ? found.item.name : null; if (r.wrongItem) r.note = 'This barcode is on "' + found.item.name + '" in PosPort – that looks like a different product. Check the barcode on the pack and on that item.'; }
     else { newNow++; r.whyNew = found.why; if (found.maybe) r.maybe = found.maybe; }
   });
   showCatalogueAge(); renderAdd(); saveState();
@@ -1543,7 +1549,7 @@ async function lookupOne(r) {
   else if (!res.highest) { r.status = 'not found'; r.note = 'No price at Woolworths or Coles' + (r.net ? ' (name from ' + r.net.source + ')' : r.name ? ' (name from your sheet)' : ''); }
   else { r.status = unsure ? 'check' : 'ready'; r.note = unsure ? 'Matched by name – please check it is the same product' : ''; }
   const found = r.notInPos ? { item: null } : findInPos(r);
-  if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how; if (found.exact) r.yesSame = true; }
+  if (found.item) { markInPos(r, found.item); r.status = 'in PosPort'; r.note = 'found in PosPort by ' + found.how; if (found.exact) r.yesSame = true;  r.wrongItem = found.differs ? found.item.name : null; if (r.wrongItem) r.note = 'This barcode is on "' + found.item.name + '" in PosPort – that looks like a different product. Check the barcode on the pack and on that item.'; }
   else { if (found.maybe) r.maybe = found.maybe; r.whyNew = found.why; }
 }
 
@@ -1875,6 +1881,7 @@ function combineStatus(r) {
   const posName = (c) => ({ posName: c.name, posPrice: c.price, posBarcode: c.barcode || '' });
   if (r.status === 'created') return Object.assign({ status: '✅ Created by the bot' }, r.pos ? posName(r.pos) : {});
   const all = r.barcode ? posAllByBarcode(r.barcode) : [];
+  if (all.length && !all.some((c) => !rowNamesDiffer(r, c.name))) return Object.assign({ status: '⚠️ Check – barcode is on a different Back Office item', dupes: all.length }, posName(all[0]), { posName: all.map((c) => c.name).join(' | '), hint: 'invoice / shop name does not match – check the barcode' });
   if (all.length) return Object.assign({ status: '✅ In Back Office', dupes: all.length }, posName(all[0]), { posName: all.map((c) => c.name).join(' | ') });
   const f = findInPos(r);
   if (f.item && f.exact) return Object.assign({ status: '✅ In Back Office (other barcode)' }, posName(f.item));
@@ -2169,6 +2176,7 @@ async function turnPage(page) {
 
 async function scanCatalogueNow() {
   {
+    const t0 = Date.now() - 5000;                             // only items PosPort sends during THIS read count
     if (!(await posGo('/catalog/items', 'items'))) { log('Items page did not open.', 'err'); return; }
     const cl = await pos('clearListSearch', S.delayMs);
     if (cl && cl.cleared) await sleep(1500);
@@ -2192,7 +2200,11 @@ async function scanCatalogueNow() {
     const shown = await pos('listTotal');
     const said = shown && shown.total;
     const cap = await pos('captured');
-    const capItems = (cap && cap.items) || [];
+    // the bot's memory of PosPort answers also holds items you have since deleted or renamed: use only
+    // what PosPort sent during this read (or what is on screen now), so old names never come back
+    const allCap = (cap && cap.items) || [];
+    const capItems = allCap.filter((c) => (c.seen || 0) >= t0 || seen.has(String(c.name || '').toLowerCase()));
+    const dropped = allCap.length - capItems.length;
     // the network copy has ids and barcodes; check its price units against what is on screen
     let ratio = 1;
     const both = capItems.filter((c) => seen.has(c.name.toLowerCase()) && c.price > 0 && seen.get(c.name.toLowerCase()).price > 0);
@@ -2211,7 +2223,9 @@ async function scanCatalogueNow() {
     const prev = state.catalogue || [];
     const fresh = Array.from(seen.values());
     let kept = 0;
-    if (prev.length && fresh.length < prev.length * 0.8) {
+    const complete = !stoppedEarly && (!said || seen.size >= said * 0.95);
+    if (dropped && complete) log(dropped + ' old PosPort items the bot remembered (deleted or renamed since) are no longer used.', 'ok');
+    if (!complete && prev.length && fresh.length < prev.length * 0.8) {
       const have = new Set(fresh.map((c) => c.name.toLowerCase()));
       prev.forEach((c) => { if (!have.has(c.name.toLowerCase())) { fresh.push(c); kept++; } });
     }
@@ -2586,7 +2600,11 @@ async function lblRunNow() {
     // Lines can be item names or barcodes. Turn barcodes into PosPort names where we know them.
     const isBarcode = (x) => /^\d{7,14}$/.test(x.replace(/\s/g, ''));
     const cap = await pos('captured');
-    const capItems = (cap && cap.items) || [];
+    // the bot's memory of PosPort answers also holds items you have since deleted or renamed: use only
+    // what PosPort sent during this read (or what is on screen now), so old names never come back
+    const allCap = (cap && cap.items) || [];
+    const capItems = allCap.filter((c) => (c.seen || 0) >= t0 || seen.has(String(c.name || '').toLowerCase()));
+    const dropped = allCap.length - capItems.length;
     const nameFor = (line) => {
       if (!isBarcode(line)) return line;
       const bc = line.replace(/\s/g, '');

@@ -482,6 +482,19 @@
     return !!a && !!b && Math.min(coverScore(a, b), coverScore(b, a)) >= 0.99 && (sizesIn(a).size > 0) === (sizesIn(b).size > 0);
   }
 
+  // Do two names plausibly describe the same product? Lenient, because Back Office names are often short-hand
+  // ("CAD CARMELLO 35G" = "Cadbury Giant Caramello Koala 35g"). False only when clearly different:
+  // no word in common (first 3 letters) AND the sizes are different or missing.
+  function relatedNames(a, b) {
+    const words = (s) => coverWords(s).filter((t) => !/^\d/.test(t) && t.length >= 3 && !COVER_STOP.has(t));
+    const A = words(a), B = words(b);
+    if (!A.length || !B.length) return true;                  // nothing to compare
+    const hit = A.some((x) => B.some((y) => x.slice(0, 3) === y.slice(0, 3)));
+    const sa = sizesIn(a), sb = sizesIn(b);
+    const sameSize = sa.size && sb.size && [...sa].some((x) => sb.has(x));
+    return hit || sameSize;
+  }
+
   // ---------- spreadsheet input ----------
   // rows: array of arrays (first row may be a header). Returns [{barcode, name, category, price, currentPrice}]
   function parseInputRows(rows) {
@@ -524,7 +537,7 @@
     DEFAULT_SETTINGS, DEFAULT_CATEGORIES, round2, parseMoney, money, regularPrice,
     highestPrice, newItemPrice, checkExistingPrice, cleanBarcode, sameBarcode, validBarcode,
     shortName, setAbbreviations, squeeze, unitPrice, guessCategory, similarity, bestMatch, posScore, posMatch, searchWords, sizeOf, parseInputRows, normaliseSize,
-    unitBarcode, coverScore, sameProduct, sameName,
+    unitBarcode, coverScore, sameProduct, sameName, relatedNames,
   };
   root.CSB_RULES = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -84,3 +84,11 @@ console.log('rules tests passed');
   A.strictEqual(R2.sameName('Heinz Baked Beans 420g', 'Heinz Baked Beans BBQ Sauce 420g'), false);
   console.log('matching rules: ok');
 }
+{
+  const R3 = require('../extension/core/rules.js');
+  const A = require('assert');
+  A.strictEqual(R3.relatedNames('Cadbury Curly Wurly Sharepack 135g', 'CHEETHOS PUFFS 80G'), false);
+  A.strictEqual(R3.relatedNames('Cadbury Giant Caramello Koala 35g', 'CAD CARMELLO 35G'), true);
+  A.strictEqual(R3.relatedNames('Thins Salt & Vinegar Potato Chips 175g', 'THINS SALT&VNGR 175G'), true);
+  console.log('related names: ok');
+}

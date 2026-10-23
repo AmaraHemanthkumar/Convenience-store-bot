@@ -520,13 +520,14 @@ def main():
 
         # PosPort's own item data has real barcodes (one only inside a variant, SKUs are not barcodes):
         # Re-check reads them, and rows that had only matched by NAME go back to new, with the reason shown
-        pos.evaluate("""() => localStorage.setItem('__csb_items', JSON.stringify({
+        pos.evaluate("""() => { localStorage.setItem('__csb_items', JSON.stringify({
           101: {id: '101', name: '5 Gum Grape Spark 27g', price: 0.5, barcode: '9300000001016', barcodes: ['9300000001016']},
           102: {id: '102', name: 'A2 Full Cream 2L', price: 7.5, barcode: '9300000001023', barcodes: ['9300000001023']},
           103: {id: '103', name: 'Allens Minties Bag 150g', price: 6.2, barcode: '9300682012345', barcodes: ['9300682012345']},
           104: {id: '104', name: 'Allens Minties Party 500g', price: 9, barcode: '9300000001047', barcodes: ['9300000001047']},
           105: {id: '105', name: 'Aramada Foil Trays med 3pack', price: 5.99, barcode: '9300000001054', barcodes: ['9300000001054']},
-          110: {id: '110', name: 'Huggies Gentle Cleanse Baby Wipes Fragrance Free 80 Pack', price: 4.99, barcode: '9300000001108', barcodes: ['9300000001108']}}))""")
+          110: {id: '110', name: 'Huggies Gentle Cleanse Baby Wipes Fragrance Free 80 Pack', price: 4.99, barcode: '9300000001108', barcodes: ['9300000001108']}}))
+          const s = JSON.parse(localStorage.getItem('__csb_items')); Object.values(s).forEach((x) => { x.seen = Date.now() + 600000; }); localStorage.setItem('__csb_items', JSON.stringify(s)); }""")
         page.click("[data-tab=add]")
         page.evaluate("document.getElementById('log').textContent = ''")
         page.click("#addRecheck")
@@ -542,6 +543,7 @@ def main():
         pos.evaluate("""() => { const s = JSON.parse(localStorage.getItem('__csb_items'));
           s[120] = {id: '120', name: 'Nestle Kit Kat Chunky 70g', price: 6.0, barcode: '9300605094703', barcodes: ['9300605094703']};
           s[121] = {id: '121', name: 'KitKat Chunky King (old)', price: 2.99, barcode: '9300605094703', barcodes: ['9300605094703']};
+          Object.values(s).forEach((x) => { x.seen = Date.now() + 600000; });
           localStorage.setItem('__csb_items', JSON.stringify(s)); }""")
         page.evaluate("document.getElementById('log').textContent = ''")
         page.click("#addRecheck")
