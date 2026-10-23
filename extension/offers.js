@@ -92,6 +92,7 @@ $('ofAdd').addEventListener('click', () => {
   if (ofPicked.length < (type === 'set' ? 2 : 1)) { log(type === 'set' ? 'Tick at least two items for a meal deal.' : 'Tick the items that count for this offer.', 'err'); return; }
   if (!(price > 0)) { log('Type the deal price.', 'err'); return; }
   const o = { id: ofEditing || ('of' + Date.now().toString(36)), name: ($('ofName').value || suggestName()).trim(), type, qty: type === 'set' ? ofPicked.length : qty, price,
+    category: $('ofCat').value || '',
     items: ofPicked.map((c) => ({ id: c.id || '', name: c.name, price: c.price, barcode: c.barcode || '' })), createdAt: Date.now(), inPosPort: false };
   offers = offers.filter((x) => x.id !== o.id).concat([o]);
   saveOffers(); renderOffers(); log('Offer saved: ' + o.name, 'ok'); resetOffer();
@@ -104,15 +105,18 @@ function renderOffers() {
       const normal = o.type === 'set' ? m(prices.reduce((a, b) => a + b, 0)) : m(Math.min(...prices) * o.qty) + (Math.min(...prices) !== Math.max(...prices) ? '–' + m(Math.max(...prices) * o.qty) : '');
       return '<tr data-i="' + i + '"><td><b>' + esc(o.name) + '</b></td><td>' + (o.type === 'set' ? 'all together' : 'any ' + o.qty) + ' for ' + m(o.price) + '</td><td class="small-note">' +
         o.items.map((x) => esc(x.name)).join('<br>') + '</td><td class="num">' + normal + '</td><td class="small-note">' + esc(fmtTime(o.createdAt)) + '</td>' +
-        '<td><button class="btn small of-edit">Change</button> <button class="btn small of-del">✕</button></td></tr>';
+        '<td><button class="btn small primary-outline of-pos" title="Fill PosPort\'s Create Combo page with this offer (you press Save)">Put into PosPort</button>' + (o.inPosPort ? '<span class="sub">filled ' + esc(fmtTime(o.inPosPort)) + '</span>' : '') +
+        ' <button class="btn small of-edit">Change</button> <button class="btn small of-del">✕</button></td></tr>';
     }).join('') : '<tr><td colspan="6" class="muted">No offers yet.</td></tr>') + '</tbody>';
 }
 $('ofTable').addEventListener('click', (e) => {
   const tr = e.target.closest('tr[data-i]'); if (!tr) return;
   const o = offers[Number(tr.dataset.i)];
   if (e.target.classList.contains('of-del')) { if (confirm('Delete the offer "' + o.name + '"? (Only in the bot – nothing in PosPort changes.)')) { offers = offers.filter((x) => x !== o); saveOffers(); renderOffers(); } }
+  if (e.target.classList.contains('of-pos')) { offerToPosPort(o); return; }
   if (e.target.classList.contains('of-edit')) {
     ofEditing = o.id; ofPicked = o.items.map((x) => Object.assign({}, x));
+    if (o.category) $('ofCat').value = o.category;
     $('ofType').value = o.type; $('ofQty').value = o.type === 'set' ? 2 : o.qty; $('ofPrice').value = o.price; $('ofName').value = o.name; $('ofName').dataset.edited = '1';
     $('ofAdd').textContent = 'Save changes'; renderPicked(); renderResults(); window.scrollTo(0, 0);
   }
@@ -129,4 +133,37 @@ $('ofTickets').addEventListener('click', () => {
   showTab('tickets');
 });
 
+function fillOfferCats() {
+  const cur = $('ofCat').value;
+  $('ofCat').innerHTML = categories.map((c) => '<option>' + esc(c) + '</option>').join('');
+  $('ofCat').value = cur || (categories.find((c) => /^drinks$/i.test(c)) || categories[0] || '');
+}
+
+// any N of the items -> one slot "exactly N, multiples allowed"; a meal deal -> one slot per item, exactly 1 each
+function comboOf(o) {
+  return {
+    name: o.name, category: o.category || $('ofCat').value, price: o.price,
+    slots: o.type === 'set' ? o.items.map((x) => ({ qty: 1, multiples: false, items: [x.name] })) : [{ qty: o.qty, multiples: true, items: o.items.map((x) => x.name) }],
+  };
+}
+async function offerToPosPort(o) {
+  const combo = comboOf(o);
+  if (!combo.category) { log('Pick the PosPort category for this offer first (Change › PosPort category).', 'err'); return; }
+  return posJob('filling the combo "' + o.name + '"', async () => {
+    log('Opening Create Combo in PosPort for "' + o.name + '"…');
+    const tabId = await posTab();
+    await chrome.tabs.update(tabId, { url: POS + '/catalog/combo/new' });
+    await sleep(600); await waitComplete(tabId, 30000); await sleep(1500);
+    const r = await exec(tabId, ['core/combo.js'], async (c) => { try { return await CSB_COMBO.fillCombo(c); } catch (e) { return { ok: false, error: String(e && e.message || e) }; } }, [combo]);
+    if (!r || !r.ok) { log('Combo "' + o.name + '": ' + ((r && r.error) || 'no answer from the PosPort tab') + ' – nothing was saved.', 'err'); return; }
+    o.inPosPort = Date.now(); saveOffers(); renderOffers();
+    const miss = (r.missing || []).filter((x) => !/^\(/.test(x) && !/^category/.test(x));
+    log('Combo "' + o.name + '" is filled in on the PosPort tab (' + (r.summary || []).join('; ') + '). Check it and press Save there.' +
+      (miss.length ? ' Not added – not in PosPort\'s combo list, usually because the item has no category in PosPort: ' + miss.join(', ') + '. Give them a category and add them in that slot.' : '') +
+      ((r.missing || []).filter((x) => /^\(|^category/.test(x)).length ? ' Also: ' + r.missing.filter((x) => /^\(|^category/.test(x)).join('; ') : ''), miss.length ? 'err' : 'ok');
+    chrome.tabs.update(tabId, { active: true });
+  });
+}
+
+fillOfferCats();
 loadOffers();

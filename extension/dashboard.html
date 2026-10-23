@@ -260,6 +260,7 @@
             <span id="ofSave" class="muted small-note"></span>
           </div>
           <div class="row"><input type="text" id="ofName" placeholder="offer name" class="wide-input"></div>
+          <div class="row"><label class="inline">PosPort category <select id="ofCat"></select></label></div>
           <div class="row"><button id="ofAdd" class="btn primary">Save offer</button><button id="ofReset" class="btn small">Start again</button></div>
         </div>
       </div>
@@ -270,7 +271,7 @@
         <button id="ofTickets" class="btn small">Offer tickets</button>
       </div>
       <div class="tablewrap"><table id="ofTable" class="grid"></table></div>
-      <p class="muted small-note">Putting an offer into PosPort's combo screen is the next step: open one combo in the Back Office with me once, and the bot will fill it in for you from here.</p>
+      <p class="muted small-note"><b>Put into PosPort</b> opens Create Combo in the PosPort tab and fills in the name, category, price and drinks/items, with "exactly N · multiples allowed" and $0 upgrades. It does <b>not</b> press Save – look it over and press Save in PosPort yourself. Items with no category in PosPort can't be added to a combo (PosPort hides them) – the bot tells you which.<br>A combo is rung up on the till by picking the combo first; it does not apply by itself when the items are scanned.</p>
     </section>
 
     <section id="tab-check" class="panel hidden">
@@ -451,6 +452,7 @@
   <script src="core/shopinvoices.js"></script>
   <script src="vendor/tesseract/tesseract.min.js"></script>
   <script src="core/photoinvoice.js"></script>
+  <script src="core/combo.js"></script>
   <script src="dashboard.js"></script>
   <script src="inbox.js"></script>
   <script src="offers.js"></script>

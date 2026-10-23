@@ -3460,7 +3460,7 @@ function showTab(name) {
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('hidden', p.id !== 'tab-' + name));
   if (name === 'tickets') renderTickets();
-  if (name === 'offers' && typeof renderResults === 'function') { renderResults(); renderPicked(); }
+  if (name === 'offers' && typeof renderResults === 'function') { fillOfferCats(); renderResults(); renderPicked(); }
   if (name === 'inbox' && typeof renderInbox === 'function') renderInbox();
 }
 document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));

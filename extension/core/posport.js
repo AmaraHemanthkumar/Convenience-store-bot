@@ -327,12 +327,21 @@
     return { name: idx(/item name/i), price: idx(/price/i) };
   }
 
+  // The name cell starts with a round letter badge ("F" + "FANTA ORANGE 1.25L" read together = "FFANTA…").
+  // Use the label checkbox's own text ("Choose FANTA ORANGE 1.25L for labels"), else the longest piece of text.
+  function cellName(cell, tr) {
+    const cb = tr.querySelector('input[aria-label^="Choose "][aria-label$=" for labels"]');
+    if (cb) return norm(cb.getAttribute('aria-label').replace(/^Choose /, '').replace(/ for labels$/, ''));
+    const leaves = Array.from(cell.querySelectorAll('*')).filter((e) => !e.children.length).map((e) => norm(e.textContent)).filter(Boolean);
+    if (leaves.length > 1) return leaves.sort((a, b) => b.length - a.length)[0];
+    return norm(cell.textContent);
+  }
   function listRows() {
     let rows = Array.from(document.querySelectorAll('tbody tr, [role="row"]')).filter((r) => visible(r) && !r.querySelector('th'));
     const h = headerIndex();
     return rows.map((tr, i) => {
       const cells = Array.from(tr.querySelectorAll('td,[role="cell"],[role="gridcell"]'));
-      const name = h.name >= 0 && cells[h.name] ? norm(cells[h.name].textContent) : '';
+      const name = h.name >= 0 && cells[h.name] ? cellName(cells[h.name], tr) : '';
       const priceTxt = h.price >= 0 && cells[h.price] ? norm(cells[h.price].textContent) : (norm(tr.textContent).match(/\$\s?\d+(\.\d+)?/) || [''])[0];
       const cb = tr.querySelector('input[type=checkbox],[role="checkbox"],button[aria-checked]');
       const checked = cb ? (cb.checked === true || cb.getAttribute('aria-checked') === 'true' || cb.getAttribute('data-state') === 'checked') : false;
